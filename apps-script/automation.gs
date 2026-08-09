@@ -43,6 +43,12 @@ var CLIENT_COL_FORM_URL = 7; // رابط النموذج
 // لأن الرد يبقى في "ردود النموذج 1" ولا شيء يُعلّمه كمُعالَج.
 var IGNORED_FORM_NAMES = ['مطعم بيت الطهي'];
 
+// ═══ قفل الاعتماد المركزي ═══
+// ما دام false: لا يخرج أي بريد لعميل أو مالك إطلاقاً — كل بريد كان
+// سيُرسل خارجياً يتحوّل إلى OWNER_EMAIL بعنوان "[معلَّق بانتظار
+// الاعتماد]" لتعاينه بنفسك. عند الاعتماد النهائي غيّرها إلى true.
+var EXTERNAL_SEND_APPROVED = false;
+
 /* ========================= دوال مساعدة عامة ========================= */
 
 /** يقرأ قيمة من ورقة الإعدادات بالبحث عن المفتاح في العمود A. */
@@ -53,6 +59,28 @@ function getSetting_(key) {
     if (String(rows[i][0]).trim() === key) return String(rows[i][1]).trim();
   }
   return '';
+}
+
+/**
+ * الإرسال الخارجي المحكوم بقفل الاعتماد: ما دام EXTERNAL_SEND_APPROVED
+ * = false، يتحوّل البريد إليك (OWNER_EMAIL) مع بيان المستلم الأصلي
+ * بدل أن يصل العميل. يعيد true فقط إن وصل المستلم الفعلي.
+ */
+function sendClientEmail_(recipient, subject, htmlBody) {
+  if (!EXTERNAL_SEND_APPROVED) {
+    MailApp.sendEmail({
+      to: getSetting_('OWNER_EMAIL'),
+      subject: '[معلَّق بانتظار الاعتماد] ' + subject,
+      htmlBody: '<b>⛔ قفل الاعتماد مفعّل — لم يُرسل هذا البريد للمستلم.</b><br>'
+              + 'المستلم الأصلي: ' + recipient + '<br>'
+              + 'للاعتماد النهائي: غيّر EXTERNAL_SEND_APPROVED إلى true في automation.gs.<br><hr>'
+              + htmlBody,
+      name: getSetting_('BRAND_NAME')
+    });
+    return false;
+  }
+  MailApp.sendEmail({ to: recipient, subject: subject, htmlBody: htmlBody, name: getSetting_('BRAND_NAME') });
+  return true;
 }
 
 /** يعيد ورقة داخل ملف العميل، وينشئها بالرؤوس الصحيحة إن كانت مفقودة. */
@@ -287,18 +315,15 @@ function onboardNewClient_(clientName, clientEmail, sector, displayName) {
     formUrl
   ]);
 
-  // 4) بريد ترحيبي للعميل يحمل رابطه الجاهز
+  // 4) بريد ترحيبي للعميل يحمل رابطه الجاهز (محكوم بقفل الاعتماد)
   if (clientEmail) {
-    MailApp.sendEmail({
-      to: clientEmail,
-      subject: 'رابط إدخال بيانات الأداء — ' + getSetting_('BRAND_NAME'),
-      htmlBody: 'مرحباً ' + (displayName || clientName) + '،<br><br>'
-              + 'هذا رابطك الخاص لإدخال بيانات الأداء اليومية:<br>'
-              + '<a href="' + formUrl + '">' + formUrl + '</a><br><br>'
-              + 'بمجرد أول إدخال ستبدأ تقاريرك بالوصول تلقائياً.<br><br>'
-              + getSetting_('SENDER_NAME'),
-      name: getSetting_('BRAND_NAME')
-    });
+    sendClientEmail_(clientEmail,
+      'رابط إدخال بيانات الأداء — ' + getSetting_('BRAND_NAME'),
+      'مرحباً ' + (displayName || clientName) + '،<br><br>'
+        + 'هذا رابطك الخاص لإدخال بيانات الأداء اليومية:<br>'
+        + '<a href="' + formUrl + '">' + formUrl + '</a><br><br>'
+        + 'بمجرد أول إدخال ستبدأ تقاريرك بالوصول تلقائياً.<br><br>'
+        + getSetting_('SENDER_NAME'));
   }
 
   // 5) تأكيد داخلي واحد للفريق
@@ -637,16 +662,14 @@ function buildCustomClientForm(clientSheetId, clientName, sector, extraQuestions
 
   var client = listClients_().filter(function (c) { return c.sheetId === clientSheetId; })[0];
   if (client) {
-    MailApp.sendEmail({
-      to: client.email,
-      subject: 'نموذجك الخاص لإدخال بيانات الأداء — ' + getSetting_('BRAND_NAME'),
-      htmlBody: 'مرحباً ' + (client.display || clientName) + '،<br><br>'
-              + 'هذا نموذجك المخصص لإدخال بياناتك اليومية:<br>'
-              + '<a href="' + form.getPublishedUrl() + '">' + form.getPublishedUrl() + '</a><br><br>'
-              + 'لا حاجة لكتابة اسمك — يُسجَّل تلقائياً مع كل رد.<br><br>'
-              + getSetting_('SENDER_NAME'),
-      name: getSetting_('BRAND_NAME')
-    });
+    // محكوم بقفل الاعتماد — لن يصل العميل قبل موافقتك النهائية
+    sendClientEmail_(client.email,
+      'نموذجك الخاص لإدخال بيانات الأداء — ' + getSetting_('BRAND_NAME'),
+      'مرحباً ' + (client.display || clientName) + '،<br><br>'
+        + 'هذا نموذجك المخصص لإدخال بياناتك اليومية:<br>'
+        + '<a href="' + form.getPublishedUrl() + '">' + form.getPublishedUrl() + '</a><br><br>'
+        + 'لا حاجة لكتابة اسمك — يُسجَّل تلقائياً مع كل رد.<br><br>'
+        + getSetting_('SENDER_NAME'));
   }
 
   Logger.log('تم إنشاء النموذج المخصص: ' + form.getPublishedUrl());
@@ -959,12 +982,17 @@ function setupMasariGovernance() {
     GOVERNANCE_FORM_ID: form.getId()
   });
 
-  // 3) اطلاع الملاك (قراءة فقط) إن حُدّدت أبرِدتهم
-  OWNERS_VIEWER_EMAILS.forEach(function (email) {
-    try { bookFile.addViewer(email); } catch (err) {
-      Logger.log('تعذّرت مشاركة السجل مع ' + email + ': ' + err.message);
-    }
-  });
+  // 3) اطلاع الملاك (قراءة فقط) — محكوم بقفل الاعتماد أيضاً
+  if (EXTERNAL_SEND_APPROVED) {
+    OWNERS_VIEWER_EMAILS.forEach(function (email) {
+      try { bookFile.addViewer(email); } catch (err) {
+        Logger.log('تعذّرت مشاركة السجل مع ' + email + ': ' + err.message);
+      }
+    });
+  } else if (OWNERS_VIEWER_EMAILS.length) {
+    Logger.log('قفل الاعتماد مفعّل — لم يُشارَك السجل مع الملاك بعد ('
+        + OWNERS_VIEWER_EMAILS.join('، ') + ').');
+  }
 
   // 4) البريد لك برابطي النموذج والسجل
   MailApp.sendEmail({
