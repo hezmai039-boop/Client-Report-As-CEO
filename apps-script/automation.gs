@@ -848,3 +848,158 @@ function deleteOwnerTest() {
   props.deleteProperty('OWNER_TEST_FORM_ID');
   Logger.log('تم محو التجربة بالكامل: النموذج والسجل والمشغّل.');
 }
+
+/* ============ (8) حوكمة إدارة مساري: توثيق يومي للملاك ============ */
+
+/**
+ * وحدة حوكمة مستقلة عن منصة العملاء بالكامل: استبيان يومي يعبّئه
+ * المدير التنفيذي بنفسه، يوثّق كل جوانب إدارة شركة مساري (عمليات
+ * العملاء، المبيعات، المالية، الفريق، القرارات والمخاطر) في سجل
+ * حوكمة دائم — دليل موثَّق بطوابع زمنية أمام الملاك على جدية
+ * وانضباط آلية العمل.
+ *
+ * شغّل setupMasariGovernance مرة واحدة: تنشئ السجل والنموذج
+ * والمشغّل، وترسل الرابط لبريدك. لمنح الملاك اطلاعاً مباشراً،
+ * أضف بريداً في OWNERS_VIEWER_EMAILS قبل التشغيل (أو لاحقاً يدوياً
+ * عبر مشاركة السجل كقارئ Viewer).
+ */
+
+var GOVERNANCE_SHEET_NAME = 'سجل حوكمة - مساري';
+var TAB_GOV_DAILY = 'السجل اليومي';
+
+// أبرِدة الملاك الذين يُمنحون اطلاعاً للقراءة فقط على سجل الحوكمة.
+// اتركها فارغة الآن وأضِفها لاحقاً عند جاهزيتك لمشاركة السجل.
+var OWNERS_VIEWER_EMAILS = [];
+
+var GOV_HEADERS = [
+  'الطابع الزمني', 'تاريخ اليوم',
+  // عمليات العملاء
+  'عدد العملاء النشطين', 'تقارير أُرسلت للعملاء اليوم', 'شكاوى أو مشاكل عملاء',
+  // المبيعات والنمو
+  'عملاء محتملون جدد تم التواصل معهم', 'اجتماعات ومكالمات جادة', 'عقود جديدة (عدد وقيمة)',
+  // المالية
+  'إيرادات محصَّلة اليوم', 'مصروفات اليوم', 'مستحقات معلَّقة',
+  // الفريق والتشغيل
+  'مهام مخطَّطة أُنجزت', 'معوقات تشغيلية',
+  // الحوكمة والقرارات
+  'قرارات إدارية اتُّخذت اليوم', 'مخاطر جديدة أو ملاحظات التزام',
+  'تقييم ذاتي لالتزام اليوم بالخطة (1-5)',
+  // التخطيط
+  'خطة الغد'
+];
+
+function setupMasariGovernance() {
+  var MY_EMAIL = 'hezmai425@gmail.com';
+
+  // 1) سجل الحوكمة في نفس مجلد المشروع
+  var folder = DriveApp.getFileById(MASTER_SHEET_ID).getParents().next();
+  var book = SpreadsheetApp.create(GOVERNANCE_SHEET_NAME);
+  var bookFile = DriveApp.getFileById(book.getId());
+  folder.addFile(bookFile);
+  DriveApp.getRootFolder().removeFile(bookFile);
+
+  getOrCreateTab_(book, TAB_GOV_DAILY, GOV_HEADERS);
+  getOrCreateTab_(book, 'ميثاق الحوكمة', ['البند', 'القيمة']);
+  var defaultSheet = book.getSheetByName('Sheet1') || book.getSheetByName('ورقة1');
+  if (defaultSheet && book.getSheets().length > 1) book.deleteSheet(defaultSheet);
+
+  var charter = book.getSheetByName('ميثاق الحوكمة');
+  [
+    ['الغرض', 'توثيق يومي مُلزم لإدارة شركة مساري أمام الملاك — دليل جدية وانضباط آلية العمل'],
+    ['المسؤول عن التعبئة', getSetting_('SENDER_NAME')],
+    ['وتيرة التعبئة', 'يومياً بنهاية يوم العمل'],
+    ['قاعدة الطوابع الزمنية', 'كل صف يُسجَّل آلياً بطابع زمني لا يمكن تعديله عبر النموذج — أي تأخير أو انقطاع يظهر تلقائياً'],
+    ['اطلاع الملاك', 'قراءة فقط عبر مشاركة هذا السجل (Viewer)'],
+    ['تاريخ التفعيل', Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd')]
+  ].forEach(function (row) { charter.appendRow(row); });
+
+  // 2) استبيان الحوكمة اليومي — الأسئلة تطابق GOV_HEADERS بالترتيب
+  var form = FormApp.create('حوكمة مساري — الاستبيان الإداري اليومي');
+  form.setDescription('يُعبَّأ يومياً بنهاية يوم العمل من المدير التنفيذي.\n'
+      + 'كل رد يُسجَّل بطابع زمني دائم في سجل الحوكمة المتاح للملاك للقراءة.');
+
+  form.addDateItem().setTitle('تاريخ اليوم').setRequired(true);
+
+  form.addSectionHeaderItem().setTitle('أولاً — عمليات العملاء');
+  form.addTextItem().setTitle('عدد العملاء النشطين').setRequired(true);
+  form.addTextItem().setTitle('تقارير أُرسلت للعملاء اليوم').setRequired(true);
+  form.addParagraphTextItem().setTitle('شكاوى أو مشاكل عملاء');
+
+  form.addSectionHeaderItem().setTitle('ثانياً — المبيعات والنمو');
+  form.addTextItem().setTitle('عملاء محتملون جدد تم التواصل معهم').setRequired(true);
+  form.addTextItem().setTitle('اجتماعات ومكالمات جادة');
+  form.addTextItem().setTitle('عقود جديدة (عدد وقيمة)');
+
+  form.addSectionHeaderItem().setTitle('ثالثاً — المالية');
+  form.addTextItem().setTitle('إيرادات محصَّلة اليوم').setRequired(true);
+  form.addTextItem().setTitle('مصروفات اليوم').setRequired(true);
+  form.addTextItem().setTitle('مستحقات معلَّقة');
+
+  form.addSectionHeaderItem().setTitle('رابعاً — الفريق والتشغيل');
+  form.addTextItem().setTitle('مهام مخطَّطة أُنجزت');
+  form.addParagraphTextItem().setTitle('معوقات تشغيلية');
+
+  form.addSectionHeaderItem().setTitle('خامساً — الحوكمة والقرارات');
+  form.addParagraphTextItem().setTitle('قرارات إدارية اتُّخذت اليوم');
+  form.addParagraphTextItem().setTitle('مخاطر جديدة أو ملاحظات التزام');
+  form.addScaleItem().setTitle('تقييم ذاتي لالتزام اليوم بالخطة (1-5)').setBounds(1, 5).setRequired(true);
+
+  form.addSectionHeaderItem().setTitle('سادساً — التخطيط');
+  form.addParagraphTextItem().setTitle('خطة الغد').setRequired(true);
+
+  form.setDestination(FormApp.DestinationType.SPREADSHEET, book.getId());
+
+  ScriptApp.newTrigger('onGovernanceFormSubmit')
+      .forForm(form.getId())
+      .onFormSubmit()
+      .create();
+
+  PropertiesService.getScriptProperties().setProperties({
+    GOVERNANCE_SHEET_ID: book.getId(),
+    GOVERNANCE_FORM_ID: form.getId()
+  });
+
+  // 3) اطلاع الملاك (قراءة فقط) إن حُدّدت أبرِدتهم
+  OWNERS_VIEWER_EMAILS.forEach(function (email) {
+    try { bookFile.addViewer(email); } catch (err) {
+      Logger.log('تعذّرت مشاركة السجل مع ' + email + ': ' + err.message);
+    }
+  });
+
+  // 4) البريد لك برابطي النموذج والسجل
+  MailApp.sendEmail({
+    to: MY_EMAIL,
+    subject: '🏛️ وحدة حوكمة مساري جاهزة — ' + getSetting_('BRAND_NAME'),
+    htmlBody: 'تم تفعيل وحدة الحوكمة الإدارية.<br><br>'
+            + '<b>استبيانك اليومي (يُعبَّأ بنهاية كل يوم عمل):</b><br>'
+            + '<a href="' + form.getPublishedUrl() + '">' + form.getPublishedUrl() + '</a><br><br>'
+            + '<b>سجل الحوكمة (هذا ما يراه الملاك):</b><br>'
+            + '<a href="' + book.getUrl() + '">' + book.getUrl() + '</a><br><br>'
+            + 'كل رد يُسجَّل بطابع زمني آلي دائم — الانتظام نفسه يصبح دليلاً.<br>'
+            + 'لمنح الملاك الاطلاع: شارك السجل معهم كقارئ (Viewer) من زر المشاركة.<br><br>'
+            + getSetting_('SENDER_NAME'),
+    name: getSetting_('BRAND_NAME')
+  });
+
+  Logger.log('تم التفعيل. الاستبيان: ' + form.getPublishedUrl() + ' | السجل: ' + book.getUrl());
+  return { formUrl: form.getPublishedUrl(), sheetUrl: book.getUrl() };
+}
+
+/**
+ * معالج استبيان الحوكمة — ينسخ كل رد إلى "السجل اليومي" المنظَّم،
+ * مع حارس ضد تكرار نفس اليوم.
+ */
+function onGovernanceFormSubmit(e) {
+  var book = e.range.getSheet().getParent();
+  var values = e.values; // [الطابع الزمني, تاريخ اليوم, ...الإجابات بترتيب الأسئلة]
+  var dataDate = normalizeDate_(values[1]);
+
+  var daily = getOrCreateTab_(book, TAB_GOV_DAILY, GOV_HEADERS);
+
+  var existing = daily.getDataRange().getValues();
+  for (var i = 1; i < existing.length; i++) {
+    if (normalizeDate_(existing[i][1]) === dataDate) return; // رُصد هذا اليوم مسبقاً
+  }
+
+  daily.appendRow(values.slice(0, GOV_HEADERS.length));
+}
