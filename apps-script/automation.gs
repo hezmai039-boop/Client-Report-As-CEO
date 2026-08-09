@@ -556,3 +556,146 @@ function onboardWejhaNawaf() {
 
   return result;
 }
+
+/* ============ (6) نموذج Google Form مخصص لكل عميل ============ */
+
+/**
+ * تصميم مختلف تماماً عن مسار Master Sheet المشترك: لكل عميل هنا نموذج
+ * خاص به بالكامل، يكتب مباشرة في سجله الفردي — لا يمر إطلاقاً عبر
+ * "ردود النموذج 1" في Master Sheet. هذا يُلغي من أصله فئتي الأخطاء
+ * اللتين أصلحناهما سابقاً (اسم غير مطابق / حقل اسم فارغ) لأن العميل
+ * لا يكتب اسمه يدوياً في هذا النموذج إطلاقاً — الاسم والقطاع يُكتبان
+ * تلقائياً بمعرفة الكود عند كل رد.
+ *
+ * الأسئلة الثابتة (تطابق ترتيب أعمدة "البيانات اليومية" 4-14) تُبنى
+ * دائماً، ثم تُضاف أسئلة العميل الخاصة بعدها بأي عدد يريده.
+ *
+ * مثال استخدام لعميل موجود مسبقاً:
+ *   buildCustomClientForm(
+ *     '1OeivQc0nrQq4FPg0rpnxjgKOaFt1XAAB_0JgDEZ4PUA', // معرّف سجل العميل
+ *     'وجهة مستثمر',                                    // الاسم كما في Master Sheet
+ *     'خدمات',                                           // القطاع
+ *     [
+ *       { title: 'عدد المكالمات الجادة اليوم', type: 'NUMBER' },
+ *       { title: 'اسم أهم عميل محتمل تم التواصل معه اليوم', type: 'TEXT' }
+ *     ]
+ *   );
+ */
+function buildCustomClientForm(clientSheetId, clientName, sector, extraQuestions) {
+  extraQuestions = extraQuestions || [];
+
+  var form = FormApp.create(clientName + ' — نموذج بيانات مخصص');
+  form.setDescription('نموذج بيانات الأداء اليومي — ' + clientName
+      + '\nيُملأ يومياً؛ لا حاجة لكتابة اسم العميل، يُسجَّل تلقائياً.');
+
+  form.addDateItem().setTitle('تاريخ البيانات').setRequired(true);
+  form.addTextItem().setTitle('إجمالي الإيرادات').setRequired(true);
+  form.addTextItem().setTitle('عدد العمليات').setRequired(true);
+  form.addTextItem().setTitle('تكلفة البضاعة/التشغيل');
+  form.addTextItem().setTitle('عملاء جدد');
+  form.addTextItem().setTitle('عملاء متكررون');
+  form.addTextItem().setTitle('مصروفات التسويق');
+  form.addScaleItem().setTitle('رضا العملاء').setBounds(1, 5);
+  form.addTextItem().setTitle('أبرز صنف/خدمة');
+  form.addTextItem().setTitle('مؤشر قطاعي إضافي');
+  form.addParagraphTextItem().setTitle('ملاحظات اليوم');
+
+  extraQuestions.forEach(function (q) {
+    var item;
+    switch (q.type) {
+      case 'PARAGRAPH':
+        item = form.addParagraphTextItem();
+        break;
+      case 'SCALE':
+        item = form.addScaleItem().setBounds(q.min || 1, q.max || 5);
+        break;
+      case 'MULTIPLE_CHOICE':
+        item = form.addMultipleChoiceItem();
+        item.setChoiceValues(q.choices || ['نعم', 'لا']);
+        break;
+      case 'NUMBER':
+      case 'TEXT':
+      default:
+        item = form.addTextItem();
+    }
+    item.setTitle(q.title).setRequired(!!q.required);
+  });
+
+  // الردود الخام تُحفظ في تبويب تلقائي داخل سجل العميل نفسه — للتدقيق فقط
+  form.setDestination(FormApp.DestinationType.SPREADSHEET, clientSheetId);
+
+  ScriptApp.newTrigger('onCustomFormSubmit')
+      .forForm(form.getId())
+      .onFormSubmit()
+      .create();
+
+  fillClientProfile_(clientSheetId, [
+    ['رابط النموذج المخصص (للعميل)', form.getPublishedUrl()],
+    ['رابط تحرير النموذج المخصص (داخلي)', form.getEditUrl()],
+    ['عدد الأسئلة الخاصة المضافة', String(extraQuestions.length)]
+  ]);
+
+  var client = listClients_().filter(function (c) { return c.sheetId === clientSheetId; })[0];
+  if (client) {
+    MailApp.sendEmail({
+      to: client.email,
+      subject: 'نموذجك الخاص لإدخال بيانات الأداء — ' + getSetting_('BRAND_NAME'),
+      htmlBody: 'مرحباً ' + (client.display || clientName) + '،<br><br>'
+              + 'هذا نموذجك المخصص لإدخال بياناتك اليومية:<br>'
+              + '<a href="' + form.getPublishedUrl() + '">' + form.getPublishedUrl() + '</a><br><br>'
+              + 'لا حاجة لكتابة اسمك — يُسجَّل تلقائياً مع كل رد.<br><br>'
+              + getSetting_('SENDER_NAME'),
+      name: getSetting_('BRAND_NAME')
+    });
+  }
+
+  Logger.log('تم إنشاء النموذج المخصص: ' + form.getPublishedUrl());
+  return { formUrl: form.getPublishedUrl(), editUrl: form.getEditUrl(), formId: form.getId() };
+}
+
+/**
+ * معالج موحّد لكل النماذج المخصصة — لا يحتاج معرفة أي عميل أرسل الرد؛
+ * يكتشف ذلك من ملف السجل الذي كُتب فيه الرد الخام مباشرة (نفس ملف
+ * العميل الذي رُبط النموذج به عبر setDestination)، ثم يطابقه بمعرّف
+ * السجل في Master Sheet لجلب الاسم والقطاع الصحيحين.
+ */
+function onCustomFormSubmit(e) {
+  var clientBook = e.range.getSheet().getParent();
+  var clientSheetId = clientBook.getId();
+
+  var client = listClients_().filter(function (c) { return c.sheetId === clientSheetId; })[0];
+  if (!client) {
+    MailApp.sendEmail({
+      to: getSetting_('OWNER_EMAIL'),
+      subject: '[أتمتة مساري] ⚠️ رد نموذج مخصص من سجل غير مُطابَق',
+      body: 'وصل رد نموذج مخصص لملف (' + clientBook.getUrl() + ') لكن لا يوجد عميل بهذا '
+          + 'المعرّف في Master Sheet. راجع الأمر يدوياً.'
+    });
+    return;
+  }
+
+  var values = e.values; // [الطابع الزمني, تاريخ البيانات, إيرادات, عمليات, ...ثم الأسئلة الخاصة]
+  var dataDate = normalizeDate_(values[1]);
+
+  var daily = getOrCreateTab_(clientBook, TAB_CLIENT_DAILY, [
+    'الطابع الزمني', 'اسم العميل', 'القطاع', 'تاريخ البيانات',
+    'إجمالي الإيرادات', 'عدد العمليات', 'تكلفة البضاعة/التشغيل',
+    'عملاء جدد', 'عملاء متكررون', 'مصروفات التسويق', 'رضا العملاء',
+    'أبرز صنف/خدمة', 'مؤشر قطاعي إضافي', 'ملاحظات اليوم'
+  ]);
+
+  if (dailyRowExists_(daily, dataDate)) return; // حارس ضد التكرار
+
+  // الأعمدة الثابتة الإحدى عشرة الأولى (values[1..11]) تطابق ترتيب البناء في
+  // buildCustomClientForm؛ أي أسئلة خاصة إضافية تقع بعدها في values[12..]
+  var fixedAnswers = values.slice(1, 12);
+  var row = [values[0], client.name, client.sector].concat(fixedAnswers);
+  daily.appendRow(row);
+  markClientActive_(client.rowIndex);
+
+  var customAnswers = values.slice(12);
+  if (customAnswers.length) {
+    var customTab = getOrCreateTab_(clientBook, 'بيانات مخصّصة', ['الطابع الزمني', 'تاريخ البيانات', 'الإجابات الخاصة']);
+    customTab.appendRow([values[0], values[1], customAnswers.join(' | ')]);
+  }
+}
