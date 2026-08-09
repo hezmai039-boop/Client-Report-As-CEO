@@ -1153,3 +1153,128 @@ function makeSharedFormStepByStep() {
   Logger.log('تم تحويل النموذج المشترك لتجربة سؤال-بكل-صفحة: ' + form.getPublishedUrl());
   return { formUrl: form.getPublishedUrl() };
 }
+
+/* ============ (10) استقبال ردود واتساب — بلا نموذج ولا رابط ============ */
+
+/**
+ * بديل كامل عن النموذج للعملاء الذين يُفضَّل عدم ظهور أي رابط أو ذكر
+ * لأي أداة خارجية أمامهم: يرسل المستشار رسالة نصية جاهزة (مرفقة في
+ * الوثائق) عبر واتساب، يردّ عليها العميل بنفس الترقيم، ثم يلصق
+ * المستشار [اسم العميل] و[نص الرد الخام] في ورقة "استقبال واتساب" —
+ * والتوزيع على الأعمدة الصحيحة يحدث تلقائياً، بلا أي كتابة يدوية.
+ *
+ * لا تُستبدل الطبقات الأخرى — هذا مسار ثالث موازٍ للنموذج المشترك
+ * والنموذج المخصص، لاستخدامه فقط مع العملاء الذين يتطلبون هذا الشكل.
+ */
+
+var TAB_WHATSAPP_INBOX = 'استقبال واتساب';
+var WHATSAPP_INBOX_HEADERS = ['التاريخ', 'اسم العميل', 'نص رد العميل (الصق هنا)', 'الحالة'];
+
+// ترتيب الأسئلة في رسالة الواتساب — يطابق ترتيب الأعمدة 5-13 في
+// "البيانات اليومية". عدّل هذا الترتيب لو غيّرت نص الرسالة المُرسَلة.
+var WHATSAPP_FIELD_ORDER = [
+  'revenue', 'operations', 'cost', 'newClients',
+  'repeatClients', 'marketing', 'satisfaction', 'topItem', 'notes'
+];
+
+/** يهيّئ ورقة "استقبال واتساب" في Master Sheet ويُنصّب مشغّل onEdit. */
+function setupWhatsappInbox() {
+  var master = SpreadsheetApp.openById(MASTER_SHEET_ID);
+  getOrCreateTab_(master, TAB_WHATSAPP_INBOX, WHATSAPP_INBOX_HEADERS);
+
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === 'onWhatsappInboxEdit') ScriptApp.deleteTrigger(trigger);
+  });
+  ScriptApp.newTrigger('onWhatsappInboxEdit')
+      .forSpreadsheet(MASTER_SHEET_ID)
+      .onEdit()
+      .create();
+
+  Logger.log('تم تجهيز ورقة "استقبال واتساب" ومشغّلها. الصق اسم العميل في العمود B ونص الرد في العمود C.');
+}
+
+/**
+ * يحلّل نص رد واتساب المرقَّم إلى خريطة {رقم السؤال: القيمة}.
+ * يتجاهل أي رمز تعبيري أو زخرفة قبل الرقم، ويتقبّل ":" أو "-" أو
+ * لا شيء بعد الرقم. سطر بلا رقم في أوله يُهمَل بأمان.
+ */
+function parseNumberedWhatsappReply_(text) {
+  var answers = {};
+  String(text || '').split(/\r?\n/).forEach(function (line) {
+    var match = line.match(/^\D*([1-9])\D{0,3}(.*)$/);
+    if (match) {
+      var value = match[2].replace(/^[:\-\s]+/, '').trim();
+      if (value) answers[Number(match[1])] = value;
+    }
+  });
+  return answers;
+}
+
+/** يوزّع خريطة الإجابات على أعمدة "البيانات اليومية" بترتيب WHATSAPP_FIELD_ORDER. */
+function buildDailyRowFromWhatsapp_(clientName, sector, answers) {
+  var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd');
+  var get = function (n) { return answers[n] !== undefined ? answers[n] : ''; };
+  return [
+    new Date(), clientName, sector, today,
+    get(1), get(2), get(3), get(4), get(5), get(6), get(7), get(8), '', get(9)
+  ];
+}
+
+/**
+ * مشغّل onEdit مثبَّت — يراقب ورقة "استقبال واتساب" فقط. عند اكتمال
+ * صف (اسم العميل + نص الرد)، يوزّعه فوراً على سجل العميل الصحيح
+ * ويكتب النتيجة في عمود "الحالة" لنفس الصف — دون أي حاجة لتشغيل
+ * دالة يدوياً.
+ */
+function onWhatsappInboxEdit(e) {
+  var sheet = e.range.getSheet();
+  if (sheet.getName() !== TAB_WHATSAPP_INBOX) return;
+
+  var row = e.range.getRow();
+  if (row === 1) return; // صف الرؤوس
+
+  var values = sheet.getRange(row, 1, 1, WHATSAPP_INBOX_HEADERS.length).getValues()[0];
+  var clientName = String(values[1]).trim();
+  var rawText = String(values[2]).trim();
+  var status = String(values[3]).trim();
+
+  if (!clientName || !rawText || status) return; // ناقص أو سبق معالجته
+
+  var statusCell = sheet.getRange(row, 4);
+  var client = listClients_().filter(function (c) { return c.name === clientName; })[0];
+
+  if (!client) {
+    statusCell.setValue('❌ لا يوجد عميل بهذا الاسم — تحقّق من التطابق الحرفي');
+    return;
+  }
+  if (!client.sheetId) {
+    statusCell.setValue('❌ العميل مسجَّل بلا معرّف سجل صالح');
+    return;
+  }
+
+  var answers = parseNumberedWhatsappReply_(rawText);
+  if (Object.keys(answers).length === 0) {
+    statusCell.setValue('❌ تعذّر العثور على أي رقم مُجاب في النص الملصَق');
+    return;
+  }
+
+  var clientBook = SpreadsheetApp.openById(client.sheetId);
+  var daily = getOrCreateTab_(clientBook, TAB_CLIENT_DAILY, [
+    'الطابع الزمني', 'اسم العميل', 'القطاع', 'تاريخ البيانات',
+    'إجمالي الإيرادات', 'عدد العمليات', 'تكلفة البضاعة/التشغيل',
+    'عملاء جدد', 'عملاء متكررون', 'مصروفات التسويق', 'رضا العملاء',
+    'أبرز صنف/خدمة', 'مؤشر قطاعي إضافي', 'ملاحظات اليوم'
+  ]);
+
+  var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd');
+  if (dailyRowExists_(daily, today)) {
+    statusCell.setValue('⚠️ بيانات اليوم مُدخلة مسبقاً لهذا العميل — لم يُكرَّر');
+    return;
+  }
+
+  daily.appendRow(buildDailyRowFromWhatsapp_(client.name, client.sector, answers));
+  markClientActive_(client.rowIndex);
+
+  sheet.getRange(row, 1).setValue(new Date());
+  statusCell.setValue('✅ تم الإدخال — ' + Object.keys(answers).length + ' إجابة');
+}
