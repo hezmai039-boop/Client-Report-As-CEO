@@ -295,7 +295,7 @@ function onboardNewClient_(clientName, clientEmail, sector, displayName) {
   getOrCreateTab_(book, TAB_CLIENT_PROFILE, ['البند', 'القيمة']);
 
   // حذف الورقة الافتراضية الفارغة التي ينشئها Google تلقائياً
-  var defaultSheet = book.getSheetByName('Sheet1') || book.getSheetByName('ورقة1');
+  var defaultSheet = book.getSheetByName('Sheet1') || book.getSheetByName('ورقة1') || book.getSheetByName('الورقة1');
   if (defaultSheet && book.getSheets().length > 1) book.deleteSheet(defaultSheet);
 
   // 2) بناء رابط النموذج المعبّأ مسبقاً — العميل لا يكتب اسمه ولا قطاعه
@@ -757,7 +757,7 @@ function runOwnerTest() {
   getOrCreateTab_(book, TAB_CLIENT_ARCHIVE,
       ['تاريخ الإرسال', 'نوع التقرير', 'الفترة', 'حالة الإرسال']);
   getOrCreateTab_(book, TAB_CLIENT_PROFILE, ['البند', 'القيمة']);
-  var defaultSheet = book.getSheetByName('Sheet1') || book.getSheetByName('ورقة1');
+  var defaultSheet = book.getSheetByName('Sheet1') || book.getSheetByName('ورقة1') || book.getSheetByName('الورقة1');
   if (defaultSheet && book.getSheets().length > 1) book.deleteSheet(defaultSheet);
 
   // 2) نموذج مخصص تجريبي بسؤالين خاصين كمثال حي
@@ -923,7 +923,7 @@ function setupMasariGovernance() {
 
   getOrCreateTab_(book, TAB_GOV_DAILY, GOV_HEADERS);
   getOrCreateTab_(book, 'ميثاق الحوكمة', ['البند', 'القيمة']);
-  var defaultSheet = book.getSheetByName('Sheet1') || book.getSheetByName('ورقة1');
+  var defaultSheet = book.getSheetByName('Sheet1') || book.getSheetByName('ورقة1') || book.getSheetByName('الورقة1');
   if (defaultSheet && book.getSheets().length > 1) book.deleteSheet(defaultSheet);
 
   var charter = book.getSheetByName('ميثاق الحوكمة');
