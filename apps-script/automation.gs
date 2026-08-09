@@ -699,3 +699,152 @@ function onCustomFormSubmit(e) {
     customTab.appendRow([values[0], values[1], customAnswers.join(' | ')]);
   }
 }
+
+/* ============ (7) تجربة المالك: نموذج أولي كامل بنقرة واحدة ============ */
+
+/**
+ * تجربة كاملة للنموذج المخصص قبل اعتماده مع عملاء حقيقيين.
+ * شغّلها مرة واحدة، وخلال دقيقة يصلك على hezmai039@gmail.com بريد
+ * فيه رابط نموذج تجريبي حقيقي — عبّئه بنفسك وراقب انتقال البيانات
+ * تلقائياً إلى سجل تجريبي منفصل.
+ *
+ * كل شيء معزول عن عملائك الحقيقيين:
+ * - سجل تجريبي مستقل باسم "سجل - تجربة داخلية (مساري)"
+ * - لا يُسجَّل في Master Sheet إطلاقاً — لن يستلم تقارير ولن يظهر
+ *   في الفحص اليومي
+ * - بعد انتهاء التجربة شغّل deleteOwnerTest لمحو كل أثر لها
+ */
+function runOwnerTest() {
+  var TEST_EMAIL = 'hezmai039@gmail.com';
+  var TEST_NAME  = 'تجربة داخلية (مساري)';
+
+  // 1) سجل تجريبي معزول في نفس مجلد المشروع
+  var folder = DriveApp.getFileById(MASTER_SHEET_ID).getParents().next();
+  var book = SpreadsheetApp.create('سجل - ' + TEST_NAME);
+  var bookFile = DriveApp.getFileById(book.getId());
+  folder.addFile(bookFile);
+  DriveApp.getRootFolder().removeFile(bookFile);
+
+  getOrCreateTab_(book, TAB_CLIENT_DAILY, [
+    'الطابع الزمني', 'اسم العميل', 'القطاع', 'تاريخ البيانات',
+    'إجمالي الإيرادات', 'عدد العمليات', 'تكلفة البضاعة/التشغيل',
+    'عملاء جدد', 'عملاء متكررون', 'مصروفات التسويق', 'رضا العملاء',
+    'أبرز صنف/خدمة', 'مؤشر قطاعي إضافي', 'ملاحظات اليوم'
+  ]);
+  getOrCreateTab_(book, TAB_CLIENT_ARCHIVE,
+      ['تاريخ الإرسال', 'نوع التقرير', 'الفترة', 'حالة الإرسال']);
+  getOrCreateTab_(book, TAB_CLIENT_PROFILE, ['البند', 'القيمة']);
+  var defaultSheet = book.getSheetByName('Sheet1') || book.getSheetByName('ورقة1');
+  if (defaultSheet && book.getSheets().length > 1) book.deleteSheet(defaultSheet);
+
+  // 2) نموذج مخصص تجريبي بسؤالين خاصين كمثال حي
+  var form = FormApp.create(TEST_NAME + ' — نموذج بيانات مخصص');
+  form.setDescription('نموذج تجريبي — عبّئه بأي أرقام وراقب انتقالها تلقائياً لسجل التجربة.');
+
+  form.addDateItem().setTitle('تاريخ البيانات').setRequired(true);
+  form.addTextItem().setTitle('إجمالي الإيرادات').setRequired(true);
+  form.addTextItem().setTitle('عدد العمليات').setRequired(true);
+  form.addTextItem().setTitle('تكلفة البضاعة/التشغيل');
+  form.addTextItem().setTitle('عملاء جدد');
+  form.addTextItem().setTitle('عملاء متكررون');
+  form.addTextItem().setTitle('مصروفات التسويق');
+  form.addScaleItem().setTitle('رضا العملاء').setBounds(1, 5);
+  form.addTextItem().setTitle('أبرز صنف/خدمة');
+  form.addTextItem().setTitle('مؤشر قطاعي إضافي');
+  form.addParagraphTextItem().setTitle('ملاحظات اليوم');
+  // سؤالان خاصان — مثال حي على التخصيص لكل عميل
+  form.addTextItem().setTitle('سؤال خاص 1: عدد المكالمات الجادة اليوم');
+  form.addTextItem().setTitle('سؤال خاص 2: أهم إنجاز اليوم');
+
+  form.setDestination(FormApp.DestinationType.SPREADSHEET, book.getId());
+
+  ScriptApp.newTrigger('onOwnerTestFormSubmit')
+      .forForm(form.getId())
+      .onFormSubmit()
+      .create();
+
+  // 3) حفظ المعرّفات في سجل التجربة نفسه (تُستخدم للمعالجة والتنظيف لاحقاً)
+  fillClientProfile_(book.getId(), [
+    ['رابط النموذج التجريبي', form.getPublishedUrl()],
+    ['رابط تحرير النموذج', form.getEditUrl()],
+    ['معرّف النموذج', form.getId()],
+    ['ملاحظة', 'سجل تجريبي معزول — غير مسجَّل في Master Sheet']
+  ]);
+  PropertiesService.getScriptProperties().setProperties({
+    OWNER_TEST_SHEET_ID: book.getId(),
+    OWNER_TEST_FORM_ID: form.getId()
+  });
+
+  // 4) البريد لك
+  MailApp.sendEmail({
+    to: TEST_EMAIL,
+    subject: '🧪 نموذجك التجريبي جاهز — ' + getSetting_('BRAND_NAME'),
+    htmlBody: 'مرحباً،<br><br>'
+            + 'هذا النموذج الأولي للتجربة قبل الاعتماد:<br>'
+            + '<a href="' + form.getPublishedUrl() + '">' + form.getPublishedUrl() + '</a><br><br>'
+            + '<b>خطوات التجربة:</b><br>'
+            + '1. عبّئ النموذج بأي أرقام تجريبية.<br>'
+            + '2. افتح سجل التجربة وراقب وصول البيانات تلقائياً لورقة "البيانات اليومية" '
+            + 'مع الاسم والقطاع مكتوبين آلياً (لن تكتبهما أنت):<br>'
+            + '<a href="' + book.getUrl() + '">' + book.getUrl() + '</a><br>'
+            + '3. لاحظ السؤالين الخاصين في آخر النموذج — إجاباتهما تصل تبويب "بيانات مخصّصة" المنفصل.<br><br>'
+            + 'بعد اقتناعك، شغّل deleteOwnerTest من المحرر لمحو التجربة بالكامل.<br><br>'
+            + getSetting_('SENDER_NAME'),
+    name: getSetting_('BRAND_NAME')
+  });
+
+  Logger.log('تمت التجربة. النموذج: ' + form.getPublishedUrl() + ' | السجل: ' + book.getUrl());
+  return { formUrl: form.getPublishedUrl(), sheetUrl: book.getUrl() };
+}
+
+/**
+ * معالج ردود النموذج التجريبي — نفس منطق onCustomFormSubmit لكن باسم
+ * العميل التجريبي الثابت، دون الحاجة لتسجيله في Master Sheet.
+ */
+function onOwnerTestFormSubmit(e) {
+  var book = e.range.getSheet().getParent();
+  var values = e.values;
+  var dataDate = normalizeDate_(values[1]);
+
+  var daily = getOrCreateTab_(book, TAB_CLIENT_DAILY, [
+    'الطابع الزمني', 'اسم العميل', 'القطاع', 'تاريخ البيانات',
+    'إجمالي الإيرادات', 'عدد العمليات', 'تكلفة البضاعة/التشغيل',
+    'عملاء جدد', 'عملاء متكررون', 'مصروفات التسويق', 'رضا العملاء',
+    'أبرز صنف/خدمة', 'مؤشر قطاعي إضافي', 'ملاحظات اليوم'
+  ]);
+  if (dailyRowExists_(daily, dataDate)) return;
+
+  var fixedAnswers = values.slice(1, 12);
+  daily.appendRow([values[0], 'تجربة داخلية (مساري)', 'تجريبي'].concat(fixedAnswers));
+
+  var customAnswers = values.slice(12);
+  if (customAnswers.length) {
+    var customTab = getOrCreateTab_(book, 'بيانات مخصّصة',
+        ['الطابع الزمني', 'تاريخ البيانات', 'الإجابات الخاصة']);
+    customTab.appendRow([values[0], values[1], customAnswers.join(' | ')]);
+  }
+}
+
+/**
+ * محو التجربة بالكامل بعد انتهائها: النموذج، السجل، والمشغّل.
+ */
+function deleteOwnerTest() {
+  var props = PropertiesService.getScriptProperties();
+  var sheetId = props.getProperty('OWNER_TEST_SHEET_ID');
+  var formId = props.getProperty('OWNER_TEST_FORM_ID');
+
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === 'onOwnerTestFormSubmit') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  if (formId) {
+    try { DriveApp.getFileById(formId).setTrashed(true); } catch (err) {}
+  }
+  if (sheetId) {
+    try { DriveApp.getFileById(sheetId).setTrashed(true); } catch (err) {}
+  }
+  props.deleteProperty('OWNER_TEST_SHEET_ID');
+  props.deleteProperty('OWNER_TEST_FORM_ID');
+  Logger.log('تم محو التجربة بالكامل: النموذج والسجل والمشغّل.');
+}
