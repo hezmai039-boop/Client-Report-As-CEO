@@ -1,0 +1,156 @@
+// مخطط قاعدة البيانات — منصة تقارير العملاء الآلية (مساري)
+// يطابق بنية Google Sheets الحالية حقلاً بحقل، لكن بلا سقف Apps Script
+// (20 مشغّلاً، 100 بريد/يوم، تنفيذ 6 دقائق) — راجع README.md للتفاصيل.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum QuestionType {
+  TEXT
+  NUMBER
+  PARAGRAPH
+  SCALE
+  MULTIPLE_CHOICE
+}
+
+enum ReportPeriod {
+  daily
+  weekly
+  monthly
+}
+
+enum ReportStatus {
+  pending
+  sent
+  failed
+  suppressed // محجوب بسبب قفل الاعتماد EXTERNAL_SEND_APPROVED
+}
+
+// يقابل ورقة "العملاء" في Master Sheet
+model Client {
+  id          String   @id @default(cuid())
+  name        String   @unique // الاسم الفريد المستخدم للمطابقة — يقابل عمود "اسم العميل"
+  displayName String?
+  email       String
+  sector      String?
+  active      Boolean  @default(false) // يتحوّل true تلقائياً عند أول إدخال بيانات
+  // رمز عام فريد يُستخدم في رابط تعبئة بيانات العميل — يحلّ محل
+  // "نموذج Google Form مخصص لكل عميل + مشغّل" الذي كان يصطدم بسقف
+  // 20 مشغّلاً؛ هنا لا يوجد أي مورد إضافي يُستهلك لكل عميل جديد.
+  formToken   String   @unique @default(cuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  customQuestions CustomQuestion[]
+  entries         DailyEntry[]
+  reports         Report[]
+  profileFields   ClientProfileField[]
+
+  @@index([active])
+}
+
+// يقابل تبويب "ملف العميل" في سجل كل عميل
+model ClientProfileField {
+  id       String @id @default(cuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  key      String
+  value    String
+
+  @@index([clientId])
+}
+
+// أسئلة مخصصة إضافية لكل عميل — تقابل الأسئلة الإضافية في
+// buildCustomClientForm بمشروع Apps Script
+model CustomQuestion {
+  id       String       @id @default(cuid())
+  clientId String
+  client   Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  title    String
+  type     QuestionType @default(TEXT)
+  required Boolean      @default(false)
+  choices  Json? // مصفوفة نصية لأسئلة الاختيار من متعدد
+  order    Int          @default(0)
+
+  @@index([clientId])
+}
+
+// يقابل ورقة "البيانات اليومية" في سجل كل عميل — صف واحد لكل يوم
+// لكل عميل، بحارس تكرار حقيقي على مستوى قاعدة البيانات (unique)
+// بدل الفحص اليدوي dailyRowExists_ في الكود القديم.
+model DailyEntry {
+  id              String   @id @default(cuid())
+  clientId        String
+  client          Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  dataDate        DateTime @db.Date
+
+  revenue         Decimal? @db.Decimal(14, 2)
+  operationsCount Int?
+  cost            Decimal? @db.Decimal(14, 2)
+  newClients      Int?
+  repeatClients   Int?
+  marketingSpend  Decimal? @db.Decimal(14, 2)
+  satisfaction    Int?
+  topItem         String?
+  sectorIndicator String?
+  notes           String?
+
+  // إجابات الأسئلة المخصصة: { "<customQuestionId>": "الإجابة" }
+  customAnswers   Json?
+
+  createdAt       DateTime @default(now())
+
+  @@unique([clientId, dataDate]) // يستبدل dailyRowExists_ بحارس فعلي في القاعدة
+  @@index([clientId, dataDate])
+}
+
+// يقابل تبويب "أرشيف التقارير" — سجل كل تقرير أُرسل أو حُجب
+model Report {
+  id          String       @id @default(cuid())
+  clientId    String
+  client      Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  periodType  ReportPeriod
+  periodLabel String // مثال: "05 أغسطس 2026" أو "الأسبوع 32-2026"
+  status      ReportStatus @default(pending)
+  aiSummary   String? // نص التوصيات الناتج من Gemini
+  sentAt      DateTime?
+  createdAt   DateTime     @default(now())
+
+  @@unique([clientId, periodType, periodLabel]) // يستبدل alreadySent_ بحارس فعلي
+  @@index([clientId, periodType])
+}
+
+// يقابل "سجل حوكمة - مساري" — الاستبيان الإداري اليومي للمدير التنفيذي
+model GovernanceEntry {
+  id                  String   @id @default(cuid())
+  entryDate           DateTime @unique @db.Date
+
+  activeClients       Int?
+  reportsSentToday    Int?
+  clientIssues        String?
+
+  newLeadsContacted   Int?
+  seriousMeetings     Int?
+  newContracts        String?
+
+  revenueCollected    Decimal? @db.Decimal(14, 2)
+  expensesToday       Decimal? @db.Decimal(14, 2)
+  pendingReceivables  Decimal? @db.Decimal(14, 2)
+
+  tasksCompleted      String?
+  operationalBlockers String?
+
+  decisionsToday      String?
+  risksNotes          String?
+  selfRating          Int? // 1-5
+
+  tomorrowPlan        String?
+
+  createdAt           DateTime @default(now())
+}
