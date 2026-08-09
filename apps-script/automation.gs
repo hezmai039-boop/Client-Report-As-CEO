@@ -398,14 +398,51 @@ function setupAutomation() {
 /**
  * دالة تسجيل سريعة — قالب عام. عدّل القيم الأربع وشغّلها لإضافة أي
  * عميل جديد في أقل من دقيقة.
+ *
+ * حارس: ترفض التشغيل بالقيم الافتراضية دون تعديل، لمنع إنشاء عميل
+ * وهمي بالخطأ (كما حدث فعلياً في 09 أغسطس 2026 — راجع
+ * cleanupPlaceholderClient_ للتنظيف).
  */
 function quickAddClient() {
-  return onboardNewClient_(
-      'اسم العميل الجديد', // الاسم — يجب أن يطابق ما يُكتب في النموذج حرفياً
-      '',                   // بريد العميل
-      '',                   // القطاع
-      ''                    // الاسم الظاهر
-  );
+  var name = 'اسم العميل الجديد'; // الاسم — يجب أن يطابق ما يُكتب في النموذج حرفياً
+  var email = '';                  // بريد العميل
+  var sector = '';                 // القطاع
+  var display = '';                // الاسم الظاهر
+
+  if (name === 'اسم العميل الجديد') {
+    throw new Error('عدّل القيم الأربع داخل quickAddClient قبل تشغيلها — لم تُعدَّل بعد.');
+  }
+  return onboardNewClient_(name, email, sector, display);
+}
+
+/**
+ * تنظيف العميل الوهمي "اسم العميل الجديد" الذي أُنشئ بالخطأ في
+ * 09 أغسطس 2026 بتشغيل quickAddClient بقيمها الافتراضية.
+ * يحذف صفه من Master Sheet وينقل ملف سجله إلى سلة المهملات في Drive.
+ * شغّلها مرة واحدة ثم يمكن حذف هذه الدالة.
+ */
+function cleanupPlaceholderClient_() {
+  var master = SpreadsheetApp.openById(MASTER_SHEET_ID);
+  var sheet = master.getSheetByName(TAB_CLIENTS);
+  var values = sheet.getDataRange().getValues();
+
+  for (var i = values.length - 1; i >= 1; i--) {
+    if (String(values[i][CLIENT_COL_NAME - 1]).trim() === 'اسم العميل الجديد') {
+      var sheetId = String(values[i][CLIENT_COL_SHEET_ID - 1]).trim();
+      if (sheetId) {
+        try {
+          DriveApp.getFileById(sheetId).setTrashed(true);
+        } catch (err) {
+          Logger.log('تعذّر نقل الملف للمهملات: ' + err.message);
+        }
+      }
+      sheet.deleteRow(i + 1);
+      Logger.log('تم حذف العميل الوهمي وملفه (كان معرّف السجل: ' + sheetId + ')');
+      return { cleaned: true, removedSheetId: sheetId };
+    }
+  }
+  Logger.log('لم يُعثر على عميل باسم "اسم العميل الجديد" — لا شيء للتنظيف.');
+  return { cleaned: false };
 }
 
 /** يضيف صفوف بيانات الملف التعريفي لعميل موجود مسبقاً (ورقة "ملف العميل"). */
