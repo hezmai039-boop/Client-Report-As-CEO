@@ -646,6 +646,11 @@ function buildCustomClientForm(clientSheetId, clientName, sector, extraQuestions
     item.setTitle(q.title).setRequired(!!q.required);
   });
 
+  // تجربة أنيقة سؤال-بكل-صفحة (نفس أسلوب makeSharedFormStepByStep) —
+  // العميل يضغط "التالي" بعد كل حقل، ويتخطى غير الإلزامي بلا عائق
+  insertPageBreaksBetweenAllItems_(form);
+  form.setConfirmationMessage('وصلت بياناتك بنجاح — شكراً لك. سيصلك تقريرك تلقائياً.');
+
   // الردود الخام تُحفظ في تبويب تلقائي داخل سجل العميل نفسه — للتدقيق فقط
   form.setDestination(FormApp.DestinationType.SPREADSHEET, clientSheetId);
 
@@ -1067,4 +1072,84 @@ function onGovernanceFormSubmit(e) {
   }
 
   daily.appendRow(values.slice(0, GOV_HEADERS.length));
+}
+
+/* ============ (9) استبيان أنيق "سؤال في كل صفحة" لواتساب ============ */
+
+/**
+ * يحوّل نموذج Google Forms إلى تجربة "سؤال واحد بكل مرة": يعبّئ العميل
+ * الحقل، يضغط "التالي"، ينتقل تلقائياً للسؤال الذي يليه — وإن لم يرغب
+ * بالإجابة (سؤال غير إلزامي) يضغط "التالي" فيتخطاه وينتقل للذي بعده.
+ * هذا هو المقصود من "سؤال في كل صفحة" في Google Forms، ويظهر بشكل
+ * أنيق جداً على الجوال (حيث يفتحه العملاء غالباً من واتساب).
+ *
+ * آمنة على أي نموذج قائم فعلاً: تستخدم moveItem بدل حذف/إعادة إنشاء
+ * الأسئلة، فلا تتغيّر معرّفات الحقول (entry.xxxxx) — روابط التعبئة
+ * المسبقة الموجودة بالفعل (لعملاء مثل "قسم المطاعم" و"نواف طه")
+ * تبقى تعمل تماماً كما هي بعد التحويل.
+ */
+function insertPageBreaksBetweenAllItems_(form) {
+  var items = form.getItems().filter(function (it) {
+    return it.getType() !== FormApp.ItemType.PAGE_BREAK;
+  });
+
+  for (var k = items.length - 1; k >= 1; k--) {
+    var targetIndex = items[k].getIndex(); // ثابت: لم يُزَح بعد لأن كل الإدراجات حتى الآن بعده
+    var pageBreak = form.addPageBreakItem().setTitle('السؤال ' + (k + 1) + ' من ' + items.length);
+    form.moveItem(pageBreak.getIndex(), targetIndex);
+  }
+
+  form.setProgressBar(true);
+}
+
+/**
+ * يجعل كل الحقول اختيارية (يمكن تخطيها بالضغط "التالي") ما عدا
+ * الحقول الحيوية المذكورة في requiredTitles — عادة "اسم العميل"
+ * و"تاريخ البيانات"، لأن حذف إلزاميتهما يُعيد بالضبط مشكلتي الاسم
+ * الفارغ وعدم مطابقة التاريخ اللتين أُصلحتا سابقاً (حالة نواف طه).
+ */
+function setOptionalExcept_(form, requiredTitles) {
+  form.getItems().forEach(function (item) {
+    var type = item.getType();
+    var makeRequired = requiredTitles.indexOf(item.getTitle()) !== -1;
+    var setter =
+      type === FormApp.ItemType.TEXT ? item.asTextItem() :
+      type === FormApp.ItemType.PARAGRAPH_TEXT ? item.asParagraphTextItem() :
+      type === FormApp.ItemType.SCALE ? item.asScaleItem() :
+      type === FormApp.ItemType.MULTIPLE_CHOICE ? item.asMultipleChoiceItem() :
+      type === FormApp.ItemType.CHECKBOX ? item.asCheckboxItem() :
+      type === FormApp.ItemType.DATE ? item.asDateItem() :
+      null;
+    if (setter && setter.setRequired) setter.setRequired(makeRequired);
+  });
+}
+
+/**
+ * يحوّل النموذج المشترك الحالي (المُرسَل فعلياً للعملاء عبر واتساب —
+ * نفس النموذج المذكور في FORM_URL بورقة الإعدادات) إلى تجربة أنيقة
+ * سؤال-بكل-صفحة. شغّلها مرة واحدة فقط — تعديل بنيوي دائم على النموذج.
+ *
+ * آمنة تماماً على عملائك الحاليين (حاشي باشا، وجهة مستثمر...):
+ * - لا تُغيَّر معرّفات الحقول → لا تنكسر أي روابط تعبئة مسبقة موجودة
+ * - لا تُغيَّر وجهة الردود (Master Sheet) → routeFormResponses يعمل كما هو
+ * - "اسم العميل" و"تاريخ البيانات" يبقيان إلزاميين — الحماية من فراغهما محفوظة
+ */
+function makeSharedFormStepByStep() {
+  var editUrl = getSetting_('FORM_EDIT_URL');
+  if (!editUrl) throw new Error('FORM_EDIT_URL غير موجود في ورقة الإعدادات.');
+
+  var form = FormApp.openByUrl(editUrl);
+
+  form.setDescription(
+    'يُعبَّأ يومياً — سؤال واحد في كل مرة. لا حاجة للإجابة عن كل الأسئلة؛ '
+    + 'اضغط "التالي" لتخطّي أي سؤال لا يهمّك والانتقال لما بعده.'
+  );
+
+  setOptionalExcept_(form, ['اسم العميل', 'تاريخ البيانات']);
+  insertPageBreaksBetweenAllItems_(form);
+
+  form.setConfirmationMessage('وصلت بياناتك بنجاح — شكراً لك. سيصلك تقريرك تلقائياً.');
+
+  Logger.log('تم تحويل النموذج المشترك لتجربة سؤال-بكل-صفحة: ' + form.getPublishedUrl());
+  return { formUrl: form.getPublishedUrl() };
 }
