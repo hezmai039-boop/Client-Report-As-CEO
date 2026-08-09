@@ -116,11 +116,15 @@ function listClients_() {
  * الردود التي لا تطابق أي عميل مسجَّل تُبلَّغ للفريق الداخلي (مرة واحدة
  * لكل اسم غير مكرر)، إلا الأسماء المدرجة في IGNORED_FORM_NAMES — تلك
  * تُتجاهل بصمت لأنها معروفة ومقرَّر عدم تسجيلها.
+ *
+ * الردود التي وصلت بحقل "اسم العميل" الأساسي فارغاً (مثال حقيقي: نواف
+ * طه في 09 أغسطس 2026 — ملأ الحقل المكرر في آخر النموذج بدل الأول)
+ * تُبلَّغ أيضاً بدل تجاهلها بصمت كما كان يحدث سابقاً.
  */
 function routeFormResponses() {
   var master = SpreadsheetApp.openById(MASTER_SHEET_ID);
   var responses = master.getSheetByName(TAB_FORM_RESPONSES).getDataRange().getValues();
-  if (responses.length < 2) return { moved: 0, unknown: [] };
+  if (responses.length < 2) return { moved: 0, unknown: [], blankName: [] };
 
   var clients = listClients_();
   var byName = {};
@@ -128,12 +132,22 @@ function routeFormResponses() {
 
   var moved = 0;
   var unknown = [];
+  var blankName = [];
 
   for (var i = 1; i < responses.length; i++) {
     var row = responses[i];
-    var clientName = String(row[1]).trim(); // العمود B: اسم العميل
+    var timestamp  = String(row[0]).trim();  // العمود A: طابع زمني
+    var clientName = String(row[1]).trim();  // العمود B: اسم العميل (الحقل الأساسي)
     var dataDate   = normalizeDate_(row[3]); // العمود D: تاريخ البيانات
-    if (!clientName || !dataDate) continue;
+    var altName    = String(row[14] || '').trim(); // العمود O: حقل "اسم العميل" المكرر في آخر النموذج
+
+    if (!clientName) {
+      if (timestamp) {
+        blankName.push(timestamp + (altName ? ' — الحقل المكرر يحوي: "' + altName + '"' : ''));
+      }
+      continue;
+    }
+    if (!dataDate) continue;
 
     if (IGNORED_FORM_NAMES.indexOf(clientName) !== -1) continue;
 
@@ -173,7 +187,19 @@ function routeFormResponses() {
     });
   }
 
-  return { moved: moved, unknown: unknown };
+  if (blankName.length) {
+    MailApp.sendEmail({
+      to: getSetting_('OWNER_EMAIL'),
+      subject: '[أتمتة مساري] ⚠️ ردود نموذج بحقل "اسم العميل" فارغ',
+      body: 'وصلت ردود بحقل "اسم العميل" الأساسي فارغاً، ولن تُنقَل لأي سجل:\n\n'
+          + blankName.map(function (b) { return '• ' + b; }).join('\n')
+          + '\n\nالسبب المرجّح: العميل استخدم الرابط العام للنموذج بدل رابطه المعبَّأ مسبقاً '
+          + '(عمود "رابط النموذج" في ورقة العملاء)، أو ملأ حقلاً مكرراً في آخر النموذج بدل الحقل الأول.\n'
+          + 'الحل: أعد إرسال الرابط الصحيح للعميل، أو احذف الصف يدوياً من "ردود النموذج 1" إن كان تجريبياً.'
+    });
+  }
+
+  return { moved: moved, unknown: unknown, blankName: blankName };
 }
 
 /** يفحص إن كان تاريخ بيانات معيّن مسجّلاً مسبقاً في ورقة البيانات اليومية. */
@@ -391,7 +417,8 @@ function setupAutomation() {
   // إصلاح بأثر رجعي: ينقل البيانات العالقة حالياً في Master Sheet
   var result = routeFormResponses();
   Logger.log('تم التنصيب. صفوف نُقلت: ' + result.moved
-           + ' | عملاء غير مسجَّلين: ' + result.unknown.join('، '));
+           + ' | عملاء غير مسجَّلين: ' + result.unknown.join('، ')
+           + ' | ردود بحقل اسم فارغ: ' + result.blankName.length);
   return result;
 }
 
