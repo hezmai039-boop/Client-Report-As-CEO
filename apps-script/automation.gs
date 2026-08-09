@@ -649,8 +649,12 @@ function buildCustomClientForm(clientSheetId, clientName, sector, extraQuestions
   // الردود الخام تُحفظ في تبويب تلقائي داخل سجل العميل نفسه — للتدقيق فقط
   form.setDestination(FormApp.DestinationType.SPREADSHEET, clientSheetId);
 
+  // forSpreadsheet وليس forForm: مشغّل forForm يمرّر e.response (كائن
+  // FormResponse) بلا e.range/e.values — وهذا بالضبط ما جعل بيانات
+  // التجربة الأولى تصل الردود الخام لكن لا تنتقل لـ"البيانات اليومية"
+  // بصمت (09 أغسطس 2026). forSpreadsheet يمرّر e.range/e.values فعلياً.
   ScriptApp.newTrigger('onCustomFormSubmit')
-      .forForm(form.getId())
+      .forSpreadsheet(clientSheetId)
       .onFormSubmit()
       .create();
 
@@ -782,7 +786,7 @@ function runOwnerTest() {
   form.setDestination(FormApp.DestinationType.SPREADSHEET, book.getId());
 
   ScriptApp.newTrigger('onOwnerTestFormSubmit')
-      .forForm(form.getId())
+      .forSpreadsheet(book.getId())
       .onFormSubmit()
       .create();
 
@@ -870,6 +874,41 @@ function deleteOwnerTest() {
   props.deleteProperty('OWNER_TEST_SHEET_ID');
   props.deleteProperty('OWNER_TEST_FORM_ID');
   Logger.log('تم محو التجربة بالكامل: النموذج والسجل والمشغّل.');
+}
+
+/**
+ * تنظيف شامل لكل محاولات runOwnerTest المتراكمة قبل إصلاح خطأ
+ * forForm/forSpreadsheet — deleteOwnerTest يتتبّع آخر محاولة فقط عبر
+ * PropertiesService، فتترك المحاولات الأقدم أشباحاً في Drive (نماذج
+ * وسجلات بلا مشغّل صالح). هذه تمسحها كلها دفعة واحدة بالبحث بالاسم.
+ * شغّلها مرة واحدة الآن، ثم استخدم deleteOwnerTest لاحقاً بعد كل
+ * تجربة جديدة ناجحة.
+ */
+function deleteAllOwnerTestArtifacts() {
+  var trashedForms = 0;
+  var trashedSheets = 0;
+
+  var forms = DriveApp.searchFiles("title contains 'تجربة داخلية' and mimeType = 'application/vnd.google-apps.form'");
+  while (forms.hasNext()) { forms.next().setTrashed(true); trashedForms++; }
+
+  var sheets = DriveApp.searchFiles("title = 'سجل - تجربة داخلية (مساري)'");
+  while (sheets.hasNext()) { sheets.next().setTrashed(true); trashedSheets++; }
+
+  var removedTriggers = 0;
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === 'onOwnerTestFormSubmit') {
+      ScriptApp.deleteTrigger(trigger);
+      removedTriggers++;
+    }
+  });
+
+  PropertiesService.getScriptProperties().deleteProperty('OWNER_TEST_SHEET_ID');
+  PropertiesService.getScriptProperties().deleteProperty('OWNER_TEST_FORM_ID');
+
+  Logger.log('تنظيف شامل مكتمل — نماذج محذوفة: ' + trashedForms
+      + ' | سجلات محذوفة: ' + trashedSheets
+      + ' | مشغّلات محذوفة: ' + removedTriggers);
+  return { trashedForms: trashedForms, trashedSheets: trashedSheets, removedTriggers: removedTriggers };
 }
 
 /* ============ (8) حوكمة إدارة مساري: توثيق يومي للملاك ============ */
@@ -973,7 +1012,7 @@ function setupMasariGovernance() {
   form.setDestination(FormApp.DestinationType.SPREADSHEET, book.getId());
 
   ScriptApp.newTrigger('onGovernanceFormSubmit')
-      .forForm(form.getId())
+      .forSpreadsheet(book.getId())
       .onFormSubmit()
       .create();
 
