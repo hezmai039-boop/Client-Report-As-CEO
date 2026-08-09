@@ -715,7 +715,7 @@ function onCustomFormSubmit(e) {
  * - بعد انتهاء التجربة شغّل deleteOwnerTest لمحو كل أثر لها
  */
 function runOwnerTest() {
-  var TEST_EMAIL = 'hezmai039@gmail.com';
+  var TEST_EMAIL = 'hezmai425@gmail.com';
   var TEST_NAME  = 'تجربة داخلية (مساري)';
 
   // 1) سجل تجريبي معزول في نفس مجلد المشروع
