@@ -1,5 +1,5 @@
 import { Queue } from 'bullmq';
-import IORedis from 'ioredis';
+import { Redis } from 'ioredis';
 import { env } from '../config/env.js';
 
 /**
@@ -13,7 +13,7 @@ import { env } from '../config/env.js';
  * ولا يوجد أي سقف زمني على المجموع الكلي.
  */
 
-export const connection = new IORedis(env.redisUrl, { maxRetriesPerRequest: null });
+export const connection = new Redis(env.redisUrl, { maxRetriesPerRequest: null });
 
 export const reportQueue = new Queue('reports', {
   connection,

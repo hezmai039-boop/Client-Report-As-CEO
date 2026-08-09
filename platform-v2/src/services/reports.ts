@@ -1,6 +1,7 @@
 import { db } from '../lib/db.js';
 import { generateRecommendations } from './ai.js';
 import { sendToClient } from './mailer.js';
+import { htmlToPdf } from './pdf.js';
 import type { ReportPeriod } from '@prisma/client';
 
 /**
@@ -14,7 +15,7 @@ import type { ReportPeriod } from '@prisma/client';
  *    يُسجَّل بحالة suppressed لا sent، فالأرشيف صادق دائماً.
  */
 
-function periodRange(periodType: ReportPeriod, ref: Date): { from: Date; to: Date; label: string } {
+export function periodRange(periodType: ReportPeriod, ref: Date): { from: Date; to: Date; label: string } {
   const to = new Date(ref);
   const from = new Date(ref);
   if (periodType === 'daily') {
@@ -92,7 +93,16 @@ export async function generateAndSendReport(clientId: string, periodType: Report
     `<h3>قراءة وتوصيات</h3><p>${aiSummary.replace(/\n/g, '<br>')}</p>` +
     `</div>`;
 
-  const mail = await sendToClient(client.email, `تقريرك — ${label}`, html);
+  // التقرير يُرفق PDF لمطابقة النظام القديم — وإن فشل التوليد يُرسل HTML فقط
+  let attachments;
+  try {
+    const pdf = await htmlToPdf(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"></head><body>${html}</body></html>`);
+    attachments = [{ filename: `masari-report-${periodType}.pdf`, content: pdf, contentType: 'application/pdf' }];
+  } catch (err) {
+    console.warn(`⚠️  تعذّر توليد PDF — سيُرسل HTML فقط: ${(err as Error).message}`);
+  }
+
+  const mail = await sendToClient(client.email, `تقريرك — ${label}`, html, attachments);
 
   const report = await db.report.upsert({
     where: { clientId_periodType_periodLabel: { clientId, periodType, periodLabel: label } },

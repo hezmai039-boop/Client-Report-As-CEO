@@ -12,7 +12,9 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "seed": "tsx src/lib/seed.ts"
+    "seed": "tsx src/lib/seed.ts",
+    "import:csv": "tsx src/lib/importCsv.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
@@ -24,6 +26,7 @@
     "ioredis": "^5.4.1",
     "nanoid": "^5.0.7",
     "nodemailer": "^6.9.15",
+    "puppeteer": "^24.43.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -33,6 +36,7 @@
     "@types/nodemailer": "^6.4.16",
     "prisma": "^5.20.0",
     "tsx": "^4.19.1",
-    "typescript": "^5.6.2"
+    "typescript": "^5.6.2",
+    "vitest": "^4.1.10"
   }
 }

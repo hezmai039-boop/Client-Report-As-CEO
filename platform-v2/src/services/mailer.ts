@@ -28,10 +28,17 @@ export interface MailResult {
   suppressed: boolean;     // حُجب بقفل الاعتماد وأُعيد توجيهه للمالك
 }
 
-async function deliver(to: string, subject: string, html: string): Promise<void> {
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
+async function deliver(to: string, subject: string, html: string, attachments?: MailAttachment[]): Promise<void> {
   if (!transporter) {
     // بلا SMTP مضبوط: نطبع في الطرفية بدل الفشل — مناسب للتطوير المحلي
-    console.log(`\n📧 [محاكاة بريد — SMTP غير مضبوط]\nإلى: ${to}\nالموضوع: ${subject}\n${'-'.repeat(40)}\n${html}\n`);
+    const att = attachments?.length ? `\nمرفقات: ${attachments.map((a) => `${a.filename} (${a.content.length} bytes)`).join('، ')}` : '';
+    console.log(`\n📧 [محاكاة بريد — SMTP غير مضبوط]\nإلى: ${to}\nالموضوع: ${subject}${att}\n${'-'.repeat(40)}\n${html}\n`);
     return;
   }
   await transporter.sendMail({
@@ -39,6 +46,7 @@ async function deliver(to: string, subject: string, html: string): Promise<void>
     to,
     subject,
     html,
+    attachments,
   });
 }
 
@@ -48,18 +56,19 @@ export async function sendInternal(subject: string, html: string): Promise<void>
 }
 
 /** بريد خارجي لعميل — محكوم بقفل الاعتماد */
-export async function sendToClient(recipient: string, subject: string, html: string): Promise<MailResult> {
+export async function sendToClient(recipient: string, subject: string, html: string, attachments?: MailAttachment[]): Promise<MailResult> {
   if (!env.externalSendApproved) {
     await deliver(
       env.ownerEmail,
-      `[معلَّق بانتظار الاعتماد] ${subject}`,
+      `[معلَّق بانتظار الاعتماد] ${subject}`,
       `<b>⛔ قفل الاعتماد مفعّل — لم يُرسل هذا البريد للمستلم.</b><br>` +
         `المستلم الأصلي: ${recipient}<br>` +
         `للاعتماد النهائي: اضبط EXTERNAL_SEND_APPROVED=true في .env ثم أعد التشغيل.<br><hr>` +
         html,
+      attachments,
     );
     return { delivered: false, suppressed: true };
   }
-  await deliver(recipient, subject, html);
+  await deliver(recipient, subject, html, attachments);
   return { delivered: true, suppressed: false };
 }

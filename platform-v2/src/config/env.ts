@@ -30,6 +30,9 @@ export const env = {
     model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
   },
 
+  // كلمة مرور المسارات الإدارية (/admin، /api/*، /governance*) — فارغة = مفتوح (تطوير فقط)
+  adminPassword: process.env.ADMIN_PASSWORD || '',
+
   publicBaseUrl: process.env.PUBLIC_BASE_URL || 'http://localhost:3000',
   port: Number(process.env.PORT || 3000),
 };
