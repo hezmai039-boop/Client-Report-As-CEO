@@ -1033,17 +1033,15 @@ function setupMasariGovernance() {
         + OWNERS_VIEWER_EMAILS.join('، ') + ').');
   }
 
-  // 4) البريد لك برابطي النموذج والسجل
+  // 4) البريد لك — رابط الاستبيان فقط (سجل الحوكمة متاح لاحقاً عبر
+  // Logger أو عبر Test-Path على PropertiesService عند الحاجة، لا في
+  // هذا البريد، بناءً على طلب صريح بعدم تضمينه)
   MailApp.sendEmail({
     to: MY_EMAIL,
-    subject: '🏛️ وحدة حوكمة مساري جاهزة — ' + getSetting_('BRAND_NAME'),
-    htmlBody: 'تم تفعيل وحدة الحوكمة الإدارية.<br><br>'
-            + '<b>استبيانك اليومي (يُعبَّأ بنهاية كل يوم عمل):</b><br>'
+    subject: '🏛️ استبيان حوكمة مساري اليومي — ' + getSetting_('BRAND_NAME'),
+    htmlBody: 'استبيانك اليومي (يُعبَّأ بنهاية كل يوم عمل):<br><br>'
             + '<a href="' + form.getPublishedUrl() + '">' + form.getPublishedUrl() + '</a><br><br>'
-            + '<b>سجل الحوكمة (هذا ما يراه الملاك):</b><br>'
-            + '<a href="' + book.getUrl() + '">' + book.getUrl() + '</a><br><br>'
-            + 'كل رد يُسجَّل بطابع زمني آلي دائم — الانتظام نفسه يصبح دليلاً.<br>'
-            + 'لمنح الملاك الاطلاع: شارك السجل معهم كقارئ (Viewer) من زر المشاركة.<br><br>'
+            + 'كل رد يُسجَّل بطابع زمني آلي دائم — الانتظام نفسه يصبح دليلاً.<br><br>'
             + getSetting_('SENDER_NAME'),
     name: getSetting_('BRAND_NAME')
   });
