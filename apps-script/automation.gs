@@ -117,7 +117,7 @@ function listClients_() {
  * لكل اسم غير مكرر)، إلا الأسماء المدرجة في IGNORED_FORM_NAMES — تلك
  * تُتجاهل بصمت لأنها معروفة ومقرَّر عدم تسجيلها.
  */
-function routeFormResponses_() {
+function routeFormResponses() {
   var master = SpreadsheetApp.openById(MASTER_SHEET_ID);
   var responses = master.getSheetByName(TAB_FORM_RESPONSES).getDataRange().getValues();
   if (responses.length < 2) return { moved: 0, unknown: [] };
@@ -169,7 +169,7 @@ function routeFormResponses_() {
       subject: '[أتمتة مساري] ⚠️ ردود نموذج لعملاء غير مسجَّلين',
       body: 'وصلت بيانات من أسماء غير موجودة في ورقة "العملاء"، ولن تُولَّد لها تقارير:\n\n'
           + unknown.map(function (n) { return '• ' + n; }).join('\n')
-          + '\n\nالحل: سجّل العميل عبر onboardNewClient_ ثم أعد تشغيل routeFormResponses_.'
+          + '\n\nالحل: سجّل العميل عبر onboardNewClient_ ثم أعد تشغيل routeFormResponses.'
     });
   }
 
@@ -195,7 +195,7 @@ function markClientActive_(rowIndex) {
 
 /** مشغّل النموذج — يُربط بـ onFormSubmit على Master Sheet. */
 function onFormSubmitRoute(e) {
-  routeFormResponses_();
+  routeFormResponses();
 }
 
 /* ============ (2) تسجيل عميل جديد بالكامل من نداء واحد ============ */
@@ -292,7 +292,7 @@ function onboardNewClient_(clientName, clientEmail, sector, displayName) {
  * لم تصل بياناته منذ 3 أيام أو أكثر — بدل اكتشاف ذلك يدوياً بالصدفة.
  */
 function dailyHealthCheck_() {
-  var routing = routeFormResponses_();
+  var routing = routeFormResponses();
   var stale = [];
   var today = new Date();
 
@@ -389,7 +389,7 @@ function setupAutomation() {
       .create();
 
   // إصلاح بأثر رجعي: ينقل البيانات العالقة حالياً في Master Sheet
-  var result = routeFormResponses_();
+  var result = routeFormResponses();
   Logger.log('تم التنصيب. صفوف نُقلت: ' + result.moved
            + ' | عملاء غير مسجَّلين: ' + result.unknown.join('، '));
   return result;
@@ -401,7 +401,7 @@ function setupAutomation() {
  *
  * حارس: ترفض التشغيل بالقيم الافتراضية دون تعديل، لمنع إنشاء عميل
  * وهمي بالخطأ (كما حدث فعلياً في 09 أغسطس 2026 — راجع
- * cleanupPlaceholderClient_ للتنظيف).
+ * cleanupPlaceholderClient للتنظيف).
  */
 function quickAddClient() {
   var name = 'اسم العميل الجديد'; // الاسم — يجب أن يطابق ما يُكتب في النموذج حرفياً
@@ -420,8 +420,12 @@ function quickAddClient() {
  * 09 أغسطس 2026 بتشغيل quickAddClient بقيمها الافتراضية.
  * يحذف صفه من Master Sheet وينقل ملف سجله إلى سلة المهملات في Drive.
  * شغّلها مرة واحدة ثم يمكن حذف هذه الدالة.
+ *
+ * ملاحظة: بلا شرطة سفلية في نهاية الاسم عمداً — الشرطة السفلية تخفي
+ * الدالة من قائمة "تشغيل" في محرر Apps Script، وهذه الدالة يجب أن
+ * تُشغَّل يدوياً.
  */
-function cleanupPlaceholderClient_() {
+function cleanupPlaceholderClient() {
   var master = SpreadsheetApp.openById(MASTER_SHEET_ID);
   var sheet = master.getSheetByName(TAB_CLIENTS);
   var values = sheet.getDataRange().getValues();
