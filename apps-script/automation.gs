@@ -1352,22 +1352,31 @@ function processWhatsappInboxRow_(sheet, row) {
 
   if (!clientName || !rawText || status) return false; // ناقص أو سبق معالجته
 
-  var statusCell = sheet.getRange(row, 4);
-  var client = listClients_().filter(function (c) { return c.name === clientName; })[0];
+  var result = ingestWhatsappReply_(clientName, rawText);
+  if (result.dataDate) sheet.getRange(row, 1).setValue(result.dataDate);
+  sheet.getRange(row, 4).setValue(result.status);
+  return true;
+}
 
+/**
+ * جوهر استقبال رد واتساب — منفصل عن الجدول عمداً ليُستدعى من مسارين:
+ * ورقة "استقبال واتساب"، أو مباشرةً من محرر الكود عبر
+ * quickAddWhatsappReply. يعيد {ok, status, dataDate} بلا أي كتابة
+ * في ورقة الاستقبال نفسها.
+ */
+function ingestWhatsappReply_(clientName, rawText) {
+  var client = listClients_().filter(function (c) { return c.name === String(clientName).trim(); })[0];
   if (!client) {
-    statusCell.setValue('❌ لا يوجد عميل بهذا الاسم — تحقّق من التطابق الحرفي');
-    return true;
+    return { ok: false, dataDate: '', status: '❌ لا يوجد عميل بهذا الاسم — تحقّق من التطابق الحرفي' };
   }
   if (!client.sheetId) {
-    statusCell.setValue('❌ العميل مسجَّل بلا معرّف سجل صالح');
-    return true;
+    return { ok: false, dataDate: '', status: '❌ العميل مسجَّل بلا معرّف سجل صالح' };
   }
 
   var answers = parseNumberedWhatsappReply_(rawText);
   if (Object.keys(answers).length === 0) {
-    statusCell.setValue('❌ لم يُعثر على إجابات مرقَّمة — تأكد أنك لصقت نص رد العميل نفسه لا وصفاً له');
-    return true;
+    return { ok: false, dataDate: '',
+      status: '❌ لم يُعثر على إجابات مرقَّمة — تأكد أنك لصقت نص رد العميل نفسه لا وصفاً له' };
   }
 
   var clientBook = SpreadsheetApp.openById(client.sheetId);
@@ -1384,14 +1393,61 @@ function processWhatsappInboxRow_(sheet, row) {
       || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd');
 
   if (dailyRowExists_(daily, dataDate)) {
-    statusCell.setValue('⚠️ بيانات ' + dataDate + ' مُدخلة مسبقاً لهذا العميل — لم تُكرَّر');
-    return true;
+    return { ok: false, dataDate: dataDate,
+      status: '⚠️ بيانات ' + dataDate + ' مُدخلة مسبقاً لهذا العميل — لم تُكرَّر' };
   }
 
   daily.appendRow(buildDailyRowFromWhatsapp_(client.name, client.sector, answers, dataDate));
   markClientActive_(client.rowIndex);
 
-  sheet.getRange(row, 1).setValue(dataDate);
-  statusCell.setValue('✅ تم الإدخال — ' + dataDate + ' — ' + Object.keys(answers).length + ' إجابة');
-  return true;
+  return { ok: true, dataDate: dataDate,
+    status: '✅ تم الإدخال — ' + dataDate + ' — ' + Object.keys(answers).length + ' إجابة' };
+}
+
+/* ====== (11) إدخال رد واتساب مباشرة من المحرر — بلا لصق في الجدول ====== */
+
+/**
+ * الطريقة الأسهل لإدخال ردود واتساب: الصق نص الرد بين علامتَي `
+ * (backtick) وشغّل الدالة. لا حاجة للصق في ورقة "استقبال واتساب"
+ * إطلاقاً — وهذا يتجاوز صعوبة لصق نص متعدد الأسطر داخل خلية واحدة
+ * في Google Sheets (الذي يوزّع النص على صفوف بدل خلية واحدة).
+ *
+ * يمكن إدخال عدة أيام دفعة واحدة: أضف كائناً لكل يوم في المصفوفة.
+ * تاريخ كل يوم يُقرأ من نص رسالته نفسها.
+ */
+function quickAddWhatsappReply() {
+  var CLIENT_NAME = 'مطعم حاشي باشا فرع لبن - أبو بكر';
+
+  var replies = [
+`١٧-٨-٢٠٢٦م
+
+1️⃣ إجمالي مبيعات اليوم (ريال): ٧٠٠٠
+2️⃣ عدد الطلبات/الفواتير: ٣٠
+3️⃣ تكلفة البضاعة والتشغيل: ٦٠٠٠
+4️⃣ عملاء جدد: ٢٠
+5️⃣ عملاء متكررون: ١٠
+6️⃣ مصروفات التسويق: لا يوجد
+7️⃣ تقييم رضا العملاء (من 1 إلى 5): ٤
+8️⃣ أبرز صنف مبيعاً اليوم: مضغوط دجاج سبايسي
+9️⃣ ملاحظات اليوم: صيانه تكييف`,
+
+`١٨-٨-٢٠٢٦م
+
+1️⃣ إجمالي مبيعات اليوم (ريال): ٦٥٠٠
+2️⃣ عدد الطلبات/الفواتير: ٣٣
+3️⃣ تكلفة البضاعة والتشغيل: ٥٥٠٠
+4️⃣ عملاء جدد: ٢٥
+5️⃣ عملاء متكررون: ٨
+6️⃣ مصروفات التسويق: لا يوجد
+7️⃣ تقييم رضا العملاء (من 1 إلى 5): ٤
+8️⃣ أبرز صنف مبيعاً اليوم: مضغوط دجاج سبايسي
+9️⃣ ملاحظات اليوم: متابعه صيانه تكييف`
+  ];
+
+  var results = replies.map(function (text) {
+    var r = ingestWhatsappReply_(CLIENT_NAME, text);
+    Logger.log(r.status);
+    return r.status;
+  });
+  return results;
 }
