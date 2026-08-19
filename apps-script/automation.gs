@@ -1248,11 +1248,16 @@ function extractDateFromWhatsapp_(text) {
  */
 function parseNumberedWhatsappReply_(text) {
   var answers = {};
-  var lines = arabicToLatinDigits_(text).split(/\r?\n/);
+  var lines = arabicToLatinDigits_(text)
+      .replace(/\uD83D\uDD1F/g, '10') // رمز العشرة حرف واحد لا يلتقطه نمط الأرقام
+      .split(/\r?\n/);
   var pending = null; // رقم سؤال تُرك بلا إجابة على سطره، ننتظر إجابته في سطر تالٍ
 
   var DATE_ONLY = /^\s*\d{1,4}[\/\-.]\d{1,2}[\/\-.]\d{1,4}\s*[مهـ]?\s*$/;
-  var QUESTION  = /^\s*[^\d\s]{0,2}\s*([1-9])[️⃣]*\s*[.\-)–]?\s*(.*)$/;
+  // بعد رقم السؤال يجب أن يأتي فاصل أو نص — لا رقم آخر. بدون هذا
+  // القيد كان سطر "2100" (إجابة في سطر مستقل) يُقرأ كسؤال رقم 2
+  // بقيمة 100، فيُتلف إجابتين معاً.
+  var QUESTION  = /^\s*[^\d\s]{0,2}\s*(10|[1-9])[\uFE0F\u20E3]*\s*(?:[.\-)–:]\s*)?(?!\d)(.*)$/;
 
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
@@ -1260,6 +1265,15 @@ function parseNumberedWhatsappReply_(text) {
     if (DATE_ONLY.test(line)) continue; // سطر التاريخ ليس إجابة
 
     var m = line.match(QUESTION);
+
+    // سؤال سابق ينتظر إجابته؟ السطر التالي إجابةٌ له ما لم يحمل ":"
+    // (كل أسئلة القالب تنتهي بنقطتين، فوجودهما هو ما يميّز السؤال).
+    if (pending !== null && line.indexOf(':') === -1) {
+      answers[pending] = line.trim();
+      pending = null;
+      continue;
+    }
+
     if (m) {
       var rest = m[2];
       // الإجابة بعد أول نقطتين — يمنع التقاط نص السؤال نفسه، وهو ما
@@ -1294,10 +1308,18 @@ function buildDailyRowFromWhatsapp_(clientName, sector, answers, dataDate) {
     var v = get(n);
     return v === '' ? '' : normalizeNumericAnswer_(v);
   };
+  // توافق النسختين: القالب الموحَّد الجديد فيه عشرة أسئلة
+  // (9 = مؤشر خاص بالنشاط، 10 = ملاحظات)، والقالب القديم فيه تسعة
+  // (9 = ملاحظات). نكتشف أيّهما وصل بوجود الإجابة العاشرة من عدمه،
+  // حتّى لا تهبط ملاحظات عميل قديم في عمود المؤشر القطاعي.
+  var hasTenth = answers[10] !== undefined && String(answers[10]).trim() !== '';
+  var sectorIndicator = hasTenth ? get(9) : '';
+  var notes           = hasTenth ? get(10) : get(9);
+
   return [
     new Date(), clientName, sector, dataDate,
     numeric(1), numeric(2), numeric(3), numeric(4), numeric(5),
-    numeric(6), numeric(7), get(8), '', get(9)
+    numeric(6), numeric(7), get(8), sectorIndicator, notes
   ];
 }
 
@@ -1450,4 +1472,235 @@ function quickAddWhatsappReply() {
     return r.status;
   });
   return results;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  المُشغِّل الموحَّد — طبقة الاستيعاب الكبير
+ *  ───────────────────────────────────────────────────────────────
+ *  المشكلة: كل عميل بنموذج مخصص كان يستهلك مُشغِّلاً مستقلاً
+ *  (onCustomFormSubmit)، وسقف Apps Script ~20 مُشغِّلاً للمشروع.
+ *  النتيجة: النظام يتوقف عن قبول عملاء جدد عند ~14 عميلاً بصمت،
+ *  وبرسالة خطأ غامضة عند إنشاء النموذج الخامس عشر.
+ *
+ *  الحل: عدد ثابت من المُشغِّلات لا يزيد مهما بلغ عدد العملاء —
+ *  أحداث لحظية للمسارين الرئيسيين، ومسح دوري يلتقط كل ما عداهما.
+ *  السقف الجديد لا تحدّه المُشغِّلات إطلاقاً.
+ * ═══════════════════════════════════════════════════════════════ */
+
+/** أسماء التبويبات التي يستخدمها Google لحفظ الردود الخام. */
+var RAW_RESPONSE_TAB_NAMES = [
+  'Form Responses 1', 'ردود النموذج 1', 'الردود على النموذج 1', 'ردود على النموذج 1'
+];
+
+/** الأعمدة الرقمية في "البيانات اليومية" (1-based) — تُطبَّع كأرقام. */
+var DAILY_NUMERIC_COLS = [5, 6, 7, 8, 9, 10, 11];
+
+/** ترويسة "البيانات اليومية" المعتمدة — مرجع واحد لكل الدوال. */
+var DAILY_HEADERS = [
+  'الطابع الزمني', 'اسم العميل', 'القطاع', 'تاريخ البيانات',
+  'إجمالي الإيرادات', 'عدد العمليات', 'تكلفة البضاعة/التشغيل',
+  'عملاء جدد', 'عملاء متكررون', 'مصروفات التسويق', 'رضا العملاء',
+  'أبرز صنف/خدمة', 'مؤشر قطاعي إضافي', 'ملاحظات اليوم'
+];
+
+/**
+ * يعرض جرد المُشغِّلات الحالية والسعة المتبقية.
+ * شغّلها قبل وبعد consolidateTriggers لترى الفرق بعينك.
+ */
+function auditTriggers() {
+  var triggers = ScriptApp.getProjectTriggers();
+  var counts = {};
+  triggers.forEach(function (t) {
+    var fn = t.getHandlerFunction();
+    counts[fn] = (counts[fn] || 0) + 1;
+  });
+
+  var lines = Object.keys(counts).map(function (fn) {
+    return '  • ' + fn + ' × ' + counts[fn];
+  });
+
+  var perClient = counts['onCustomFormSubmit'] || 0;
+  var report = 'إجمالي المُشغِّلات: ' + triggers.length + ' من ~20\n'
+      + lines.join('\n')
+      + '\nمنها مرتبطة بعميل واحد فقط: ' + perClient
+      + '\nالعملاء المسجَّلون: ' + listClients_().length;
+
+  Logger.log(report);
+  return { total: triggers.length, byFunction: counts, perClient: perClient };
+}
+
+/**
+ * ★ الخطوة الأولى — اعتماد المُشغِّل الموحَّد.
+ *
+ * يحذف كل مُشغِّل مرتبط بعميل بعينه، ويثبّت مجموعة ثابتة تخدم كل
+ * العملاء مهما بلغ عددهم:
+ *
+ *   1) onFormSubmitRoute  — حدث لحظي: أي رد على النموذج المشترك
+ *   2) onWhatsappInboxEdit — حدث لحظي: أي لصق في ورقة استقبال واتساب
+ *   3) universalSweep      — مسح كل 4 ساعات: شبكة أمان تلتقط أي رد
+ *                            وصل عبر نموذج مخصص أو فاته الحدث اللحظي
+ *   4) dailyHealthCheck_   — فحص صحة يومي 7 صباحاً
+ *
+ * آمنة للتكرار: شغّلها متى شئت، تُعيد ضبط الحالة لا تُضاعفها.
+ * لا تمسّ مُشغِّل الحوكمة (onGovernanceFormSubmit) لأنه واحد ثابت
+ * لسجلّك الشخصي ولا يتكاثر مع العملاء.
+ */
+function consolidateTriggers() {
+  var before = ScriptApp.getProjectTriggers().length;
+
+  // المُشغِّلات التي نديرها نحن — تُحذف ثم يُعاد بناء الموحَّد منها
+  var MANAGED = [
+    'onFormSubmitRoute', 'onWhatsappInboxEdit', 'universalSweep',
+    'dailyHealthCheck_', 'onCustomFormSubmit', 'onOwnerTestFormSubmit'
+  ];
+
+  var removedPerClient = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    var fn = t.getHandlerFunction();
+    if (MANAGED.indexOf(fn) === -1) return; // نترك ما لا نديره (الحوكمة)
+    if (fn === 'onCustomFormSubmit') removedPerClient++;
+    ScriptApp.deleteTrigger(t);
+  });
+
+  ScriptApp.newTrigger('onFormSubmitRoute')
+      .forSpreadsheet(MASTER_SHEET_ID).onFormSubmit().create();
+
+  ScriptApp.newTrigger('onWhatsappInboxEdit')
+      .forSpreadsheet(MASTER_SHEET_ID).onEdit().create();
+
+  ScriptApp.newTrigger('universalSweep')
+      .timeBased().everyHours(4).create();
+
+  ScriptApp.newTrigger('dailyHealthCheck_')
+      .timeBased().atHour(7).everyDays(1).create();
+
+  var sweep = universalSweep();
+  var after = ScriptApp.getProjectTriggers().length;
+
+  var report = 'اعتُمد المُشغِّل الموحَّد.\n'
+      + 'المُشغِّلات قبل: ' + before + ' ← بعد: ' + after + ' (ثابت مهما زاد العملاء)\n'
+      + 'مُشغِّلات فردية حُذفت: ' + removedPerClient + '\n'
+      + 'صفوف التُقطت في المسح الأول: ' + sweep.total;
+  Logger.log(report);
+  return { before: before, after: after, removedPerClient: removedPerClient, sweep: sweep };
+}
+
+/**
+ * المسح الشامل — قلب النظام الموحَّد.
+ *
+ * يعمل كل 4 ساعات ويغطي المسارات الثلاثة كلها:
+ *   أ) النموذج المشترك  ← routeFormResponses
+ *   ب) النماذج المخصصة  ← sweepCustomFormResponses_ (بدل مُشغِّل لكل عميل)
+ *   ج) ردود واتساب      ← processWhatsappInbox (صفوف بلا حالة)
+ *
+ * كل مسار محميّ بحارس التكرار dailyRowExists_، فتكرار التشغيل
+ * لا يُنتج صفاً مضاعفاً أبداً.
+ */
+function universalSweep() {
+  var result = { shared: 0, custom: 0, whatsapp: 0, total: 0, errors: [] };
+
+  try {
+    result.shared = routeFormResponses().moved;
+  } catch (err) {
+    result.errors.push('النموذج المشترك: ' + err.message);
+  }
+
+  try {
+    result.custom = sweepCustomFormResponses_();
+  } catch (err) {
+    result.errors.push('النماذج المخصصة: ' + err.message);
+  }
+
+  try {
+    var inbox = SpreadsheetApp.openById(MASTER_SHEET_ID)
+        .getSheetByName(TAB_WHATSAPP_INBOX);
+    if (inbox) result.whatsapp = processWhatsappInbox().processed;
+  } catch (err) {
+    result.errors.push('استقبال واتساب: ' + err.message);
+  }
+
+  result.total = result.shared + result.custom + result.whatsapp;
+
+  if (result.errors.length) {
+    MailApp.sendEmail({
+      to: getSetting_('OWNER_EMAIL'),
+      subject: '[أتمتة مساري] ⚠️ أخطاء في المسح الشامل',
+      body: result.errors.join('\n')
+    });
+  }
+
+  Logger.log('المسح الشامل — مشترك: ' + result.shared
+      + ' | مخصص: ' + result.custom + ' | واتساب: ' + result.whatsapp);
+  return result;
+}
+
+/**
+ * يمسح تبويب الردود الخام داخل سجل كل عميل وينقل ما لم يُنقل بعد
+ * إلى "البيانات اليومية". هذا ما يحلّ محلّ مُشغِّل onCustomFormSubmit
+ * لكل عميل — قراءة واحدة لكل عميل، بلا أي مُشغِّل.
+ *
+ * المطابقة بأسماء الأعمدة لا بمواقعها: العميل قد يضيف أسئلة خاصة
+ * فتتغيّر المواقع، بينما العناوين تبقى ثابتة.
+ */
+function sweepCustomFormResponses_() {
+  var clients = listClients_();
+  var moved = 0;
+
+  for (var i = 0; i < clients.length; i++) {
+    var client = clients[i];
+    if (!client.sheetId) continue;
+
+    var book;
+    try {
+      book = SpreadsheetApp.openById(client.sheetId);
+    } catch (err) {
+      continue; // سجل محذوف أو بلا صلاحية — يتجاهله المسح بأمان
+    }
+
+    var raw = null;
+    for (var n = 0; n < RAW_RESPONSE_TAB_NAMES.length && !raw; n++) {
+      raw = book.getSheetByName(RAW_RESPONSE_TAB_NAMES[n]);
+    }
+    if (!raw || raw.getLastRow() < 2) continue;
+
+    var values = raw.getDataRange().getValues();
+    var headers = values[0].map(function (h) { return String(h).trim(); });
+
+    // خريطة: عمود "البيانات اليومية" ← موقعه في الردود الخام
+    var map = {};
+    DAILY_HEADERS.forEach(function (title, dailyIdx) {
+      var pos = headers.indexOf(title);
+      if (pos !== -1) map[dailyIdx] = pos;
+    });
+    if (map[3] === undefined) continue; // بلا عمود "تاريخ البيانات" لا يمكن الربط
+
+    var daily = getOrCreateTab_(book, TAB_CLIENT_DAILY, DAILY_HEADERS);
+
+    for (var r = 1; r < values.length; r++) {
+      var src = values[r];
+      var dataDate = normalizeDate_(src[map[3]]);
+      if (!dataDate) continue;
+      if (dailyRowExists_(daily, dataDate)) continue;
+
+      var row = [];
+      for (var c = 0; c < DAILY_HEADERS.length; c++) {
+        if (c === 0) { row.push(new Date()); continue; }
+        if (c === 1) { row.push(client.name); continue; }
+        if (c === 2) { row.push(client.sector); continue; }
+        if (c === 3) { row.push(dataDate); continue; }
+
+        var v = map[c] !== undefined ? src[map[c]] : '';
+        if (DAILY_NUMERIC_COLS.indexOf(c + 1) !== -1) {
+          v = (v === '' || v === null) ? '' : normalizeNumericAnswer_(arabicToLatinDigits_(v));
+        }
+        row.push(v);
+      }
+
+      daily.appendRow(row);
+      markClientActive_(client.rowIndex);
+      moved++;
+    }
+  }
+
+  return moved;
 }
