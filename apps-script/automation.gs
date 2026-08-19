@@ -1194,29 +1194,99 @@ function setupWhatsappInbox() {
 }
 
 /**
+ * يحوّل الأرقام العربية-الهندية (٠١٢٣٤٥٦٧٨٩) والفارسية إلى أرقام
+ * لاتينية. ضروري لأن Google Sheets يخزّن "٧٠٠٠" كنص لا كرقم، فتفشل
+ * كل حسابات التقارير (المجاميع والمتوسطات) بصمت. حالة حقيقية: رد
+ * أبو بكر بتاريخ 17-18 أغسطس 2026 وصل كله بأرقام عربية.
+ */
+function arabicToLatinDigits_(text) {
+  return String(text || '')
+    .replace(/[٠-٩]/g, function (d) { return String(d.charCodeAt(0) - 0x0660); })
+    .replace(/[۰-۹]/g, function (d) { return String(d.charCodeAt(0) - 0x06F0); });
+}
+
+/** يحوّل تعبيرات "لا يوجد/صفر/—" في الحقول الرقمية إلى 0 بدل نص يكسر الحسابات. */
+function normalizeNumericAnswer_(value) {
+  var v = String(value || '').trim();
+  if (/^(لا\s*يوجد|لايوجد|صفر|بدون|—|–|-|_|\.)$/.test(v)) return 0;
+  var n = v.replace(/[^\d.\-]/g, '');
+  return n !== '' && !isNaN(Number(n)) ? Number(n) : v;
+}
+
+/**
+ * يستخرج تاريخ البيانات من نص الرسالة إن ذكره العميل (مثل
+ * "١٧-٨-٢٠٢٦م")، ويعيد '' إن لم يجده فيُستخدم تاريخ اليوم.
+ * بدون هذا كان كل رد يُسجَّل بتاريخ اليوم مهما كان تاريخه الحقيقي،
+ * فيستحيل إدخال يومين متتاليين (الثاني يُرفض كمكرر).
+ */
+function extractDateFromWhatsapp_(text) {
+  var t = arabicToLatinDigits_(text);
+  var pad = function (s) { return ('0' + s).slice(-2); };
+  var m = t.match(/(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/); // yyyy-mm-dd
+  if (m) return m[1] + '/' + pad(m[2]) + '/' + pad(m[3]);
+  m = t.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);     // dd-mm-yyyy
+  if (m) return m[3] + '/' + pad(m[2]) + '/' + pad(m[1]);
+  return '';
+}
+
+/**
  * يحلّل نص رد واتساب المرقَّم إلى خريطة {رقم السؤال: القيمة}.
  * يتجاهل أي رمز تعبيري أو زخرفة قبل الرقم، ويتقبّل ":" أو "-" أو
- * لا شيء بعد الرقم. سطر بلا رقم في أوله يُهمَل بأمان.
+ * لا شيء بعد الرقم. سطر بلا رقم في أوله يُهمَل بأمان، وسطر التاريخ
+ * يُتخطى صراحةً حتى لا يُقرأ خطأً كإجابة على السؤال الأول.
  */
 function parseNumberedWhatsappReply_(text) {
   var answers = {};
-  String(text || '').split(/\r?\n/).forEach(function (line) {
-    var match = line.match(/^\D*([1-9])\D{0,3}(.*)$/);
-    if (match) {
-      var value = match[2].replace(/^[:\-\s]+/, '').trim();
-      if (value) answers[Number(match[1])] = value;
+  var lines = arabicToLatinDigits_(text).split(/\r?\n/);
+  var pending = null; // رقم سؤال تُرك بلا إجابة على سطره، ننتظر إجابته في سطر تالٍ
+
+  var DATE_ONLY = /^\s*\d{1,4}[\/\-.]\d{1,2}[\/\-.]\d{1,4}\s*[مهـ]?\s*$/;
+  var QUESTION  = /^\s*[^\d\s]{0,2}\s*([1-9])[️⃣]*\s*[.\-)–]?\s*(.*)$/;
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (!line.trim()) continue;
+    if (DATE_ONLY.test(line)) continue; // سطر التاريخ ليس إجابة
+
+    var m = line.match(QUESTION);
+    if (m) {
+      var rest = m[2];
+      // الإجابة بعد أول نقطتين — يمنع التقاط نص السؤال نفسه، وهو ما
+      // كان يُخرج "154" بدل "4" في سؤال رضا العملاء (من 1 إلى 5)
+      var colon = rest.indexOf(':');
+      var value = (colon >= 0 ? rest.slice(colon + 1) : rest).trim();
+      if (value) {
+        answers[Number(m[1])] = value;
+        pending = null;
+      } else {
+        pending = Number(m[1]); // الإجابة على الأرجح في السطر التالي
+      }
+      continue;
     }
-  });
+
+    // سطر عادي: يكمل إجابة سؤال سابق تُرك فارغاً (مثل "لا يوجد")
+    if (pending !== null) {
+      answers[pending] = line.trim();
+      pending = null;
+    }
+  }
   return answers;
 }
 
-/** يوزّع خريطة الإجابات على أعمدة "البيانات اليومية" بترتيب WHATSAPP_FIELD_ORDER. */
-function buildDailyRowFromWhatsapp_(clientName, sector, answers) {
-  var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd');
+/**
+ * يوزّع خريطة الإجابات على أعمدة "البيانات اليومية".
+ * الحقول 1-7 رقمية فتُطبَّع كأرقام، والحقلان 8-9 نصيان يبقيان كما هما.
+ */
+function buildDailyRowFromWhatsapp_(clientName, sector, answers, dataDate) {
   var get = function (n) { return answers[n] !== undefined ? answers[n] : ''; };
+  var numeric = function (n) {
+    var v = get(n);
+    return v === '' ? '' : normalizeNumericAnswer_(v);
+  };
   return [
-    new Date(), clientName, sector, today,
-    get(1), get(2), get(3), get(4), get(5), get(6), get(7), get(8), '', get(9)
+    new Date(), clientName, sector, dataDate,
+    numeric(1), numeric(2), numeric(3), numeric(4), numeric(5),
+    numeric(6), numeric(7), get(8), '', get(9)
   ];
 }
 
@@ -1266,15 +1336,19 @@ function onWhatsappInboxEdit(e) {
     'أبرز صنف/خدمة', 'مؤشر قطاعي إضافي', 'ملاحظات اليوم'
   ]);
 
-  var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd');
-  if (dailyRowExists_(daily, today)) {
-    statusCell.setValue('⚠️ بيانات اليوم مُدخلة مسبقاً لهذا العميل — لم يُكرَّر');
+  // تاريخ البيانات من نص الرسالة إن ذكره العميل، وإلا تاريخ اليوم —
+  // هذا ما يسمح بإدخال عدة أيام سابقة كل منها في صفه الصحيح
+  var dataDate = extractDateFromWhatsapp_(rawText)
+      || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd');
+
+  if (dailyRowExists_(daily, dataDate)) {
+    statusCell.setValue('⚠️ بيانات ' + dataDate + ' مُدخلة مسبقاً لهذا العميل — لم تُكرَّر');
     return;
   }
 
-  daily.appendRow(buildDailyRowFromWhatsapp_(client.name, client.sector, answers));
+  daily.appendRow(buildDailyRowFromWhatsapp_(client.name, client.sector, answers, dataDate));
   markClientActive_(client.rowIndex);
 
-  sheet.getRange(row, 1).setValue(new Date());
-  statusCell.setValue('✅ تم الإدخال — ' + Object.keys(answers).length + ' إجابة');
+  sheet.getRange(row, 1).setValue(dataDate);
+  statusCell.setValue('✅ تم الإدخال — ' + dataDate + ' — ' + Object.keys(answers).length + ' إجابة');
 }
