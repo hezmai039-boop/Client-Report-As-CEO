@@ -1302,41 +1302,72 @@ function buildDailyRowFromWhatsapp_(clientName, sector, answers, dataDate) {
 }
 
 /**
- * مشغّل onEdit مثبَّت — يراقب ورقة "استقبال واتساب" فقط. عند اكتمال
- * صف (اسم العميل + نص الرد)، يوزّعه فوراً على سجل العميل الصحيح
- * ويكتب النتيجة في عمود "الحالة" لنفس الصف — دون أي حاجة لتشغيل
- * دالة يدوياً.
+ * مشغّل onEdit مثبَّت — يراقب ورقة "استقبال واتساب" فقط.
+ *
+ * ملاحظة مهمة: عند لصق عدة صفوف دفعة واحدة، يمرّر Google نطاق
+ * اللصق كاملاً في حدث واحد — لذا نعالج كل صفوف النطاق لا الصف
+ * الأول فقط (كان هذا سبب بقاء الصف الثاني بلا حالة عند لصق
+ * رسالتين معاً).
  */
 function onWhatsappInboxEdit(e) {
   var sheet = e.range.getSheet();
   if (sheet.getName() !== TAB_WHATSAPP_INBOX) return;
 
-  var row = e.range.getRow();
-  if (row === 1) return; // صف الرؤوس
+  var firstRow = e.range.getRow();
+  var lastRow = firstRow + e.range.getNumRows() - 1;
+  for (var r = Math.max(firstRow, 2); r <= lastRow; r++) {
+    processWhatsappInboxRow_(sheet, r);
+  }
+}
+
+/**
+ * يعالج كل الصفوف المعلّقة في ورقة "استقبال واتساب" دفعة واحدة.
+ * شغّلها يدوياً متى لصقت عدة صفوف ولم تظهر حالتها تلقائياً — آمنة
+ * للتكرار، تتخطى كل صف له حالة مسبقاً.
+ */
+function processWhatsappInbox() {
+  var sheet = SpreadsheetApp.openById(MASTER_SHEET_ID).getSheetByName(TAB_WHATSAPP_INBOX);
+  if (!sheet) throw new Error('ورقة "' + TAB_WHATSAPP_INBOX + '" غير موجودة — شغّل setupWhatsappInbox أولاً.');
+
+  var lastRow = sheet.getLastRow();
+  var processed = 0;
+  for (var r = 2; r <= lastRow; r++) {
+    if (processWhatsappInboxRow_(sheet, r)) processed++;
+  }
+  Logger.log('صفوف عولجت الآن: ' + processed);
+  return { processed: processed };
+}
+
+/**
+ * يعالج صفاً واحداً. يعيد true إن حاول المعالجة فعلاً (نجاحاً أو
+ * فشلاً بحالة مكتوبة)، وfalse إن تخطاه لنقص أو لأنه مُعالَج مسبقاً.
+ */
+function processWhatsappInboxRow_(sheet, row) {
+  if (row < 2) return false;
 
   var values = sheet.getRange(row, 1, 1, WHATSAPP_INBOX_HEADERS.length).getValues()[0];
   var clientName = String(values[1]).trim();
   var rawText = String(values[2]).trim();
   var status = String(values[3]).trim();
 
-  if (!clientName || !rawText || status) return; // ناقص أو سبق معالجته
+  if (!clientName || !rawText || status) return false; // ناقص أو سبق معالجته
 
   var statusCell = sheet.getRange(row, 4);
   var client = listClients_().filter(function (c) { return c.name === clientName; })[0];
 
   if (!client) {
     statusCell.setValue('❌ لا يوجد عميل بهذا الاسم — تحقّق من التطابق الحرفي');
-    return;
+    return true;
   }
   if (!client.sheetId) {
     statusCell.setValue('❌ العميل مسجَّل بلا معرّف سجل صالح');
-    return;
+    return true;
   }
 
   var answers = parseNumberedWhatsappReply_(rawText);
   if (Object.keys(answers).length === 0) {
-    statusCell.setValue('❌ تعذّر العثور على أي رقم مُجاب في النص الملصَق');
-    return;
+    statusCell.setValue('❌ لم يُعثر على إجابات مرقَّمة — تأكد أنك لصقت نص رد العميل نفسه لا وصفاً له');
+    return true;
   }
 
   var clientBook = SpreadsheetApp.openById(client.sheetId);
@@ -1354,7 +1385,7 @@ function onWhatsappInboxEdit(e) {
 
   if (dailyRowExists_(daily, dataDate)) {
     statusCell.setValue('⚠️ بيانات ' + dataDate + ' مُدخلة مسبقاً لهذا العميل — لم تُكرَّر');
-    return;
+    return true;
   }
 
   daily.appendRow(buildDailyRowFromWhatsapp_(client.name, client.sector, answers, dataDate));
@@ -1362,4 +1393,5 @@ function onWhatsappInboxEdit(e) {
 
   sheet.getRange(row, 1).setValue(dataDate);
   statusCell.setValue('✅ تم الإدخال — ' + dataDate + ' — ' + Object.keys(answers).length + ' إجابة');
+  return true;
 }
